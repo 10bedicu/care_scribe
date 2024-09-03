@@ -12,7 +12,7 @@ form_data_schema = {
         "properties": {
             "friendlyName": {"type": "string"},
             "id": {"type": "string"},
-            "default": {"type": "string"},
+            "current": {"type": ["number","string","boolean","object","array", "null"]},
             "description": {"type": "string"},
             "type": {"type": "string"},
             "example": {"type": "string"},
@@ -33,7 +33,7 @@ form_data_schema = {
                 },
             },
         },
-        "required": ["friendlyName", "id", "description", "type", "example", "default"],
+        "required": ["friendlyName", "id", "description", "type", "example", "current"],
     },
 }
 
