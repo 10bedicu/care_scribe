@@ -104,10 +104,6 @@ def process_ai_form_fill(external_id):
             logger.info(f"Generating AI response for AI form fill {form.external_id}")
             form.status = Scribe.Status.GENERATING_AI_RESPONSE
             form.save()
-            
-            print("=====")
-            print(form.form_data)
-            print("=====")
 
             # Process the transcript with Ayushma
             ai_response = get_openai_client().chat.completions.create(
