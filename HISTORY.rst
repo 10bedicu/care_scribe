@@ -2,6 +2,10 @@
 History
 =======
 
+0.2.2 (2024-09-25)
+
+* Rename coronasafe references to ohc.
+
 0.2.1 (2024-06-04)
 
 * Use translation API to generate text for the prompt.

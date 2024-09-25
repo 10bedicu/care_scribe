@@ -47,7 +47,7 @@ setup(
     packages=find_packages(include=["care_scribe", "care_scribe.*"]),
     test_suite="tests",
     tests_require=test_requirements,
-    url="https://github.com/coronasafe/care_scribe",
-    version="0.2.1",
+    url="https://github.com/ohcnetwork/care_scribe",
+    version="0.2.2",
     zip_safe=False,
 )
