@@ -86,14 +86,14 @@ class PluginSettings:  # pragma: no cover
                     f'Please set the "{setting}" in the environment or the {PLUGIN_NAME} plugin config.'
                 )
 
-        if getattr(self, "API_PROVIDER") not in ("openai", "azure"):
+        if getattr(self, "SCRIBE_SERVICE_PROVIDER") not in ("openai", "azure"):
             raise ImproperlyConfigured(
-                'Invalid value for "API_PROVIDER". '
-                'Please set the "API_PROVIDER" to "openai" or "azure".'
+                'Invalid value for "SCRIBE_SERVICE_PROVIDER". '
+                'Please set the "SCRIBE_SERVICE_PROVIDER" to "openai" or "azure".'
             )
 
-        if getattr(self, "API_PROVIDER") == "azure":
-            for setting in ("AZURE_API_VERSION", "AZURE_ENDPOINT"):
+        if getattr(self, "SCRIBE_SERVICE_PROVIDER") == "azure":
+            for setting in ("SCRIBE_AZURE_API_VERSION", "SCRIBE_AZURE_ENDPOINT"):
                 if not getattr(self, setting):
                     raise ImproperlyConfigured(
                         f'The "{setting}" setting is required when using Azure API. '
@@ -112,19 +112,19 @@ class PluginSettings:  # pragma: no cover
 
 
 REQUIRED_SETTINGS = {
-    "TRANSCRIBE_SERVICE_PROVIDER_API_KEY",
-    "AUDIO_MODEL_NAME",
-    "CHAT_MODEL_NAME",
-    "API_PROVIDER",
+    "SCRIBE_SERVICE_PROVIDER_API_KEY",
+    "SCRIBE_AUDIO_MODEL",
+    "SCRIBE_CHAT_MODEL",
+    "SCRIBE_SERVICE_PROVIDER",
 }
 
 DEFAULTS = {
-    "TRANSCRIBE_SERVICE_PROVIDER_API_KEY": "",
-    "AUDIO_MODEL_NAME": "whisper-1",
-    "CHAT_MODEL_NAME": "gpt-4-turbo",
-    "API_PROVIDER": "openai",
-    "AZURE_API_VERSION": "",
-    "AZURE_ENDPOINT": "",
+    "SCRIBE_SERVICE_PROVIDER_API_KEY": "",
+    "SCRIBE_AUDIO_MODEL": "whisper-1",
+    "SCRIBE_CHAT_MODEL": "gpt-4-turbo",
+    "SCRIBE_SERVICE_PROVIDER": "openai",
+    "SCRIBE_AZURE_API_VERSION": "",
+    "SCRIBE_AZURE_ENDPOINT": "",
 }
 
 plugin_settings = PluginSettings(

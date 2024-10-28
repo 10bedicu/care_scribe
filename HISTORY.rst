@@ -2,6 +2,12 @@
 History
 =======
 
+0.4.0 (2024-10-28)
+------------------
+
+* Added scribe context
+* Update config variables to follow standard naming scheme.
+
 0.3.0 (2024-10-11)
 ------------------
 

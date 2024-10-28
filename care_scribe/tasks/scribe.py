@@ -17,18 +17,18 @@ AiClient = None
 def get_openai_client():
     global AiClient
     if AiClient is None:
-        if plugin_settings.API_PROVIDER == 'azure':
+        if plugin_settings.SCRIBE_SERVICE_PROVIDER == 'azure':
             AiClient = AzureOpenAI(
-                api_key=plugin_settings.TRANSCRIBE_SERVICE_PROVIDER_API_KEY,
-                api_version=plugin_settings.AZURE_API_VERSION,
-                azure_endpoint=plugin_settings.AZURE_ENDPOINT
+                api_key=plugin_settings.SCRIBE_SERVICE_PROVIDER_API_KEY,
+                api_version=plugin_settings.SCRIBE_AZURE_API_VERSION,
+                azure_endpoint=plugin_settings.SCRIBE_AZURE_ENDPOINT
             )
-        elif plugin_settings.API_PROVIDER == 'openai':
+        elif plugin_settings.SCRIBE_SERVICE_PROVIDER == 'openai':
             AiClient = OpenAI(
-                api_key=plugin_settings.TRANSCRIBE_SERVICE_PROVIDER_API_KEY
+                api_key=plugin_settings.SCRIBE_SERVICE_PROVIDER_API_KEY
             )
         else:
-            raise Exception('Invalid API_PROVIDER in plugin_settings')
+            raise Exception('Invalid SCRIBE_SERVICE_PROVIDER in plugin_settings')
     return AiClient
 
 
@@ -87,7 +87,7 @@ def process_ai_form_fill(external_id):
                     buffer.name = "file.mp3"
 
                     transcription = get_openai_client().audio.translations.create(
-                        model=plugin_settings.AUDIO_MODEL_NAME, file=buffer # This can be the model name (OPENAI) or the custom deployment name (AZURE)
+                        model=plugin_settings.SCRIBE_AUDIO_MODEL, file=buffer # This can be the model name (OPENAI) or the custom deployment name (AZURE)
                     )
                     transcript += transcription.text
                     logger.info(f"Transcript: {transcript}")
@@ -104,7 +104,7 @@ def process_ai_form_fill(external_id):
 
             # Process the transcript with Ayushma
             ai_response = get_openai_client().chat.completions.create(
-                model=plugin_settings.CHAT_MODEL_NAME, # This can be the model name (OPENAI) or the custom deployment name (AZURE) 
+                model=plugin_settings.SCRIBE_CHAT_MODEL, # This can be the model name (OPENAI) or the custom deployment name (AZURE) 
                 response_format={"type": "json_object"},
                 max_tokens=4096,
                 temperature=0,
