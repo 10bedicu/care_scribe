@@ -34,10 +34,7 @@ def get_openai_client():
 
 prompt_1 = """
 Given a raw transcript, your task is to extract relevant information and structure it according to a predefined schema.
-Make sure to only append to or modify the "current" data. Example - if it is asked to add a record Y in W field, where W already contains X, your response should be [X,Y].
-If it is asked to remove record Y from W field, where W already contains X and Y, your response should be [X]. NOTE : ONLY REMOVE A RECORD IF EXPLICITLY ASKED TO
-If it is asked to update record Y from W field, where W already contains X and Y, your response should be [X, Updated_Y]. Only update if explicitly asked to update or edit.
-If a record exists and was neither asked to be updated, removed or added, KEEP IT AS IS.
+Make sure to produce the response keeping the "current" data in mind. In some cases the response might be a modification of the "current" data. Example - if it is asked to add a record Y in W field, where W already contains X, your response should be [X,Y].
 Output the structured data in JSON format.
 If a field cannot be filled due to missing information in the transcript, do not include it in the output, skip that JSON key.
 For fields that offer options, output the chosen option's ID. Ensure the output strictly adheres to the JSON schema provided.
