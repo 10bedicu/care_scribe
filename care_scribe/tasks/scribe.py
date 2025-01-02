@@ -111,11 +111,11 @@ def process_ai_form_fill(external_id):
                 messages=[
                     {
                         "role": "system",
-                        "content": prompt_1,
+                        "content": ai_form_fills.system_prompt or prompt_1,
                     },
                     {
                         "role": "system",
-                        "content": prompt_2.replace(
+                        "content": (ai_form_fills.json_prompt or prompt_2).replace(
                             "{form_schema}", json.dumps(form.form_data, indent=2)
                         ),
                     },
