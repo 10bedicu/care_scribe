@@ -7,7 +7,7 @@ from care_scribe.models.scribe_file import ScribeFile
 
 
 def check_permissions(file_type, associating_id, user):
-    if file_type == ScribeFile.FileType.SCRIBE:
+    if file_type == ScribeFile.FileType.SCRIBE_AUDIO or file_type == ScribeFile.FileType.SCRIBE_DOCUMENT:
         scribe_obj = Scribe.objects.filter(external_id=associating_id).first()
         if scribe_obj and scribe_obj.requested_by != user:
             raise ValidationError({"detail": "Permission Denied"})
