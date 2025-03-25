@@ -120,8 +120,8 @@ REQUIRED_SETTINGS = {
 
 DEFAULTS = {
     "TRANSCRIBE_SERVICE_PROVIDER_API_KEY": "",
-    "AUDIO_MODEL_NAME": "whisper-1",
-    "CHAT_MODEL_NAME": "gpt-4-turbo",
+    "AUDIO_MODEL_NAME": "gpt-4o-transcribe",
+    "CHAT_MODEL_NAME": "gpt-4o",
     "API_PROVIDER": "openai",
     "AZURE_API_VERSION": "",
     "AZURE_ENDPOINT": "",
