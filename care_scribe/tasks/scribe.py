@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import io
@@ -32,22 +33,20 @@ def get_openai_client():
     return AiClient
 
 
-prompt_1 = """
-Given a raw transcript, your task is to extract relevant information and structure it according to a predefined schema.
-Make sure to produce the response keeping the "current" data in mind.
+prompt = """
+You will be given content that can be related to a patient's encounter details in text, audio or visual format. Your task is to extract relevant information and structure it according to a predefined schema.
+Make sure to produce the response keeping the "current" data in mind. Make sure to infer from the "example" in the schema.
 Output the structured data in JSON format.
 If a field cannot be filled due to missing information in the transcript, do not include it in the output, skip that JSON key.
 For fields that offer options, output the chosen option's ID. Ensure the output strictly adheres to the JSON schema provided.
 If the option is not available in the schema, omit the field from the output.
 DO NOT Hallucinate or make assumptions about the data. Only include information that is explicitly mentioned in the transcript.
 If decimals are requested in the output where the field type is integer, send the default value as per the schema. Do not round off the value.
-"""
+If "current" data is in the form of an array, make sure to ONLY update the "current" data if specifically asked by the user. Do not replace or remove existing data unless the user has asked you to.
 
-prompt_2 = """
-Below is the JSON schema that defines the structure and type of fields expected in the output.
-Use this schema as a guide to ensure your output matches the expected format and types.
-Each field in the output must conform to its definition in the schema, including type, options (where applicable), and format.
-Schema:
+Once you are done, append what you have understood from the text, audio and visual format under a "__scribe__transcription" key in your json response as text ONLY.
+
+SCHEMA:
 {form_schema}
 """
 
@@ -59,32 +58,50 @@ def process_ai_form_fill(external_id):
     )
 
     for form in ai_form_fills:
-        # Skip forms without audio files
-        if not form.audio_file_ids:
-            logger.warning(f"AI form fill {form.external_id} has no audio files")
-            continue
-
+        
         logger.info(f"Processing AI form fill {form.external_id}")
 
-        transcript = ""
+        messages = [
+            {
+                "role": "system",
+                "content": [{
+                    "type" : "text",
+                    "text": form.prompt or prompt.replace(
+                        "{form_schema}", json.dumps(form.form_data, indent=2)
+                    ),
+                }]
+            },
+        ]
+
+        user_contents = []
+
+        # In case text support is needed
+        # if form.text:
+        #     user_contents.append(
+        #         {
+        #             "type": "text",
+        #             "text": form.text
+        #         }
+        #     )
+
         try:
-            # Update status to GENERATING_TRANSCRIPT
             logger.info(f"Generating transcript for AI form fill {form.external_id}")
             form.status = Scribe.Status.GENERATING_TRANSCRIPT
             form.save()
-
+            
+            transcript = ""
             if not form.transcript:
-                # Use Ayushma to generate transcript from the audio file
-                transcript = ""
                 audio_file_objects = ScribeFile.objects.filter(
                     external_id__in=form.audio_file_ids
                 )
+
                 logger.info(f"Audio file objects: {audio_file_objects}")
+
                 for audio_file_object in audio_file_objects:
                     _, audio_file_data = audio_file_object.file_contents()
-                    
+                    format = audio_file_object.internal_name.split('.')[-1]                    
                     buffer = io.BytesIO(audio_file_data)
-                    buffer.name = "file." + audio_file_object.internal_name.split(".")[-1]
+                    buffer.name = "file." + format
 
                     transcription = get_openai_client().audio.transcriptions.create(
                         model=plugin_settings.AUDIO_MODEL_NAME, file=buffer # This can be the model name (OPENAI) or the custom deployment name (AZURE)
@@ -97,44 +114,60 @@ def process_ai_form_fill(external_id):
             else:
                 transcript = form.transcript
 
-            # Update status to GENERATING_AI_RESPONSE
-            logger.info(f"Generating AI response for AI form fill {form.external_id}")
+            if transcript is not "":
+                user_contents.append(
+                    {
+                        "type": "text",
+                        "text": transcript
+                    }
+                )
+
+            document_file_objects = ScribeFile.objects.filter(
+                    external_id__in=form.document_file_ids
+            )
+            logger.info(f"Document file objects: {document_file_objects}")
+            for document_file_object in document_file_objects:
+                _, document_file_data = document_file_object.file_contents()
+                format = document_file_object.internal_name.split('.')[-1]
+                encoded_string = base64.b64encode(document_file_data).decode('utf-8')
+
+                user_contents.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/{format};base64,{encoded_string}"
+                        }
+                    }
+                )
+
+
+            logger.info(f"Generating AI form fill {form.external_id}")
             form.status = Scribe.Status.GENERATING_AI_RESPONSE
             form.save()
 
+            messages.append({
+                "role": "user",
+                "content":user_contents
+            })
+
+            print(messages)
+
             # Process the transcript with Ayushma
             ai_response = get_openai_client().chat.completions.create(
-                model=plugin_settings.CHAT_MODEL_NAME, # This can be the model name (OPENAI) or the custom deployment name (AZURE) 
+                model=plugin_settings.CHAT_MODEL_NAME,
                 response_format={"type": "json_object"},
                 max_tokens=4096,
                 temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": form.system_prompt or prompt_1,
-                    },
-                    {
-                        "role": "system",
-                        "content": (form.json_prompt or prompt_2).replace(
-                            "{form_schema}", json.dumps(form.form_data, indent=2)
-                        ),
-                    },
-                    {
-                        "role": "system",
-                        "content": "Below is a sample output for reference. Your task is to produce a similar JSON output based on the provided transcript, following the schema and instructions above.\n"
-                        + json.dumps(
-                            {field["id"]: field["example"] for field in form.form_data},
-                            indent=2,
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": "Please process the following transcript and output the structured data in JSON format as per the schema provided above:\nTranscript:\n"
-                        + transcript,
-                    },
-                ],
+                messages=messages
             )
-            ai_response_json = ai_response.choices[0].message.content
+            response = ai_response.choices[0].message
+            
+            if response.content == None:
+                form.status = Scribe.Status.REFUSED
+                form.save()
+                continue
+
+            ai_response_json = response.content
             logger.info(f"AI response: {ai_response_json}")
 
             # Save AI response to the form
