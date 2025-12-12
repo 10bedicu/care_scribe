@@ -149,3 +149,6 @@ class Scribe(BaseModel):
             file_type=ScribeFile.FileType.SCRIBE_DOCUMENT,
             upload_completed=True,
         ).values_list("external_id", flat=True)
+
+    def __str__(self):
+        return f"Scribe {self.external_id} - {self.status}"

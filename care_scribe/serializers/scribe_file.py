@@ -21,7 +21,6 @@ class ScribeFileUploadCreateSerializer(serializers.ModelSerializer):
     associating_id = serializers.CharField(write_only=True)
     internal_name = serializers.CharField(read_only=True)
     original_name = serializers.CharField(write_only=True)
-    mime_type = serializers.CharField(write_only=True)
     length = serializers.DecimalField(write_only=True, required=False, max_digits=20, decimal_places=2)
 
     class Meta:
@@ -49,7 +48,7 @@ class ScribeFileUploadCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context["request"].user
-        mime_type = validated_data.pop("mime_type")
+        mime_type = validated_data.get("mime_type")
 
         if mime_type not in settings.ALLOWED_MIME_TYPES:
             raise ValidationError({"detail": "Invalid File Type"})
@@ -86,6 +85,7 @@ class ScribeFileUploadUpdateSerializer(serializers.ModelSerializer):
             "upload_completed",
             "internal_name",
             "read_signed_url",
+            "mime_type",
             "length"
         )
         read_only_fields = (
@@ -93,5 +93,6 @@ class ScribeFileUploadUpdateSerializer(serializers.ModelSerializer):
             "name",
             "internal_name",
             "read_signed_url",
+            "mime_type",
             "length"
         )

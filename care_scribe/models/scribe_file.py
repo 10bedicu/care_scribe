@@ -21,6 +21,7 @@ class ScribeFile(BaseModel):
     internal_name = models.CharField(max_length=2000)
     associating_id = models.CharField(max_length=100, blank=False, null=False)
     file_type = models.IntegerField(choices=FileType.choices, default=FileType.SCRIBE_AUDIO)
+    mime_type = models.CharField(max_length=200, blank=True, null=True)
     signed_url = models.CharField(max_length=2000, blank=True, null=True)
     upload_completed = models.BooleanField(default=False)
 
@@ -51,3 +52,6 @@ class ScribeFile(BaseModel):
                 internal_name = f"{internal_name}{extension}"
             self.internal_name = internal_name
         return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"ScribeFile {self.external_id} - {self.name} - Scribe ID {self.associating_id}"

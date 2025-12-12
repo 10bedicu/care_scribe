@@ -125,6 +125,17 @@ def process_ai_form_fill(external_id):
     # Verify if the user/facility has not exceeded their quota and has accepted the terms and conditions
     user_quota = None
     facility_quota = None
+
+    if not form.audio_file_ids and not form.document_file_ids:
+        processing["error"] = "No audio or documents associated with the Scribe. Your upload might have failed."
+        form.meta["processings"] = [
+            *form.meta.get("processings", []),
+            processing
+        ]
+        form.status = Scribe.Status.FAILED
+        form.save()
+        return
+
     if not is_benchmark:
         user_quota = form.requested_by.scribe_quota.filter(facility=form.requested_in_facility).first()
         facility_quota = form.requested_in_facility.scribe_quota.filter(user=None).first()
