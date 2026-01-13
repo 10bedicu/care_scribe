@@ -8,7 +8,7 @@ from django.db import migrations, models
 def set_mime_types(apps, schema_editor):
     ScribeFile = apps.get_model('care_scribe', 'ScribeFile')
 
-    for scribe_file in ScribeFile.objects.filter(mime_type__isnull=True) | ScribeFile.objects.filter(mime_type=''):
+    for scribe_file in ScribeFile.objects.filter(models.Q(mime_type__isnull=True) | models.Q(mime_type='')):
         extension = os.path.splitext(scribe_file.internal_name)[1].lower()
 
         if scribe_file.file_type == 1:  # SCRIBE_AUDIO
