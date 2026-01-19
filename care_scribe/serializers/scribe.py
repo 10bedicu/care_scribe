@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from care.emr.models.questionnaire import Questionnaire
 from care.facility.models.facility import Facility
 from care.emr.models.encounter import Encounter
 from care.emr.models.patient import Patient
@@ -34,6 +35,15 @@ class ScribeUserSerializer(serializers.ModelSerializer):
         model = User
         fields = ["first_name", "username", "last_name", "read_profile_picture_url"]
 
+class ScribeQuestionnaireSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Questionnaire
+        fields = [
+            "external_id",
+            "title",
+            "slug"
+        ]
+
 
 class ScribeSerializer(serializers.ModelSerializer):
 
@@ -41,6 +51,12 @@ class ScribeSerializer(serializers.ModelSerializer):
     requested_in_encounter_id = serializers.CharField(write_only=True, required=False)
     requested_in_facility = FacilitySerializer(read_only=True)
     requested_in_encounter = ScribeEncounterSerializer(read_only=True)
+    requested_in_questionnaire_ids = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        required=False
+    )
+    requested_in_questionnaires = ScribeQuestionnaireSerializer(read_only=True, many=True)
     requested_by = ScribeUserSerializer(read_only=True)
     processed_ai_response = serializers.JSONField(write_only=True, required=False)
     benchmark = serializers.BooleanField(
@@ -61,6 +77,8 @@ class ScribeSerializer(serializers.ModelSerializer):
             "requested_in_facility_id",
             "requested_in_encounter",
             "requested_in_encounter_id",
+            "requested_in_questionnaires",
+            "requested_in_questionnaire_ids",
             "transcript",
             "ai_response",
             "status",
@@ -95,6 +113,7 @@ class ScribeSerializer(serializers.ModelSerializer):
         facility_id = self.validated_data.get("requested_in_facility_id", None)
         encounter_id = self.validated_data.get("requested_in_encounter_id", None)
         processed_ai_response = self.validated_data.pop("processed_ai_response", None)
+        questionnaire_ids = self.validated_data.pop("requested_in_questionnaire_ids", None)
         benchmark = self.validated_data.pop("benchmark", False) or (self.instance.meta.get("benchmark", False) if self.instance else False)
 
         user = self.context["request"].user
@@ -106,6 +125,8 @@ class ScribeSerializer(serializers.ModelSerializer):
             self.validated_data["requested_in_facility"] = Facility.objects.filter(external_id=facility_id).first()
         if encounter_id:
             self.validated_data["requested_in_encounter"] = Encounter.objects.filter(external_id=encounter_id).first()
+        if  questionnaire_ids:
+            self.validated_data["requested_in_questionnaires"] = Questionnaire.objects.filter(external_id__in=questionnaire_ids)
         if processed_ai_response:
             # update the latest processing entry with the processed_ai_response
             latest_processing = self.instance.meta.get("processings", [])[-1] if self.instance and self.instance.meta.get("processings", []) else {}

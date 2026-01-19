@@ -80,8 +80,9 @@ class ScribeViewset(
     def get_queryset(self):
         user = self.request.user
         qs = self.queryset
-        if self.action != "all":
+        if self.action != "all" and not (self.action == "retrieve" and user.is_superuser):
             qs = self.queryset.filter(requested_by=user)
+
         return qs.select_related("requested_in_facility", "requested_in_encounter__patient")
 
     def perform_create(self, serializer):
