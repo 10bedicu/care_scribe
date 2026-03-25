@@ -9,6 +9,7 @@ import textwrap
 from time import perf_counter
 from celery import shared_task
 from openai import OpenAI, AzureOpenAI
+from care_scribe.models.scribe_quota import ScribeQuota
 from care_scribe.models.scribe import Scribe
 from care_scribe.models.scribe_file import ScribeFile
 from care_scribe.settings import plugin_settings
@@ -137,8 +138,11 @@ def process_ai_form_fill(external_id):
         return
 
     if not is_benchmark:
-        user_quota = form.requested_by.scribe_quota.filter(facility=form.requested_in_facility).first()
-        facility_quota = form.requested_in_facility.scribe_quota.filter(user=None).first()
+        user_quota = ScribeQuota.objects.filter(user=form.requested_by, facility=form.requested_in_facility).first()
+        facility_quota = ScribeQuota.objects.filter(user=None, facility=form.requested_in_facility).first()
+
+        logger.info(f"=== Found user quota {user_quota.external_id if user_quota else 'None'} ===")
+        logger.info(f"=== Found facility quota {facility_quota.external_id if facility_quota else 'None'} ===")
 
         # recalculate used quota. This prevents edge cases where quota was exceeded last month and this is the first request this month
         if facility_quota:
@@ -159,6 +163,7 @@ def process_ai_form_fill(external_id):
 
         if user_quota.tnc_hash != tnc_hash:
             error = "User has not accepted the latest terms and conditions."
+            logger.info(f"User TNC hash: {user_quota.tnc_hash if user_quota else 'None'}, Current TNC hash: {tnc_hash}")
 
         if facility_quota.used >= facility_quota.tokens:
             error = "Facility has exceeded its scribe quota."
@@ -464,10 +469,12 @@ def process_ai_form_fill(external_id):
             form.chat_output_tokens = ai_response.usage_metadata.candidates_token_count
 
         else:
+            # These models do not support setting a temperature
+            no_temp_models = ["gpt-5", "gpt-5-mini", "gpt-5-nano"]
 
             ai_response = client.chat.completions.create(
                 model=chat_model,
-                temperature=temperature,
+                temperature=temperature if chat_model not in no_temp_models else None,
                 messages=messages,
                 response_format={
                     "type" : "json_schema",
