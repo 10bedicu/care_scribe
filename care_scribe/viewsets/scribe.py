@@ -44,6 +44,10 @@ class ScribeFilter(filters.FilterSet):
         label="Benchmark",
         method="filter_benchmark",
     )
+    live = filters.BooleanFilter(
+        field_name="live",
+        label="Live",
+    )
 
     def filter_benchmark(self, queryset, name, value):
         q = Q(meta__has_key="benchmark")

@@ -77,6 +77,7 @@ class ScribeSerializer(serializers.ModelSerializer):
             "chat_model",
             "audio_model",
             "chat_model_temperature",
+            "live",
             "is_feedback_positive",
             "feedback_comments",
         ]
@@ -89,6 +90,7 @@ class ScribeSerializer(serializers.ModelSerializer):
             "created_date",
             "modified_date",
             "documents",
+            "live",
         ]
 
     def save(self, **kwargs):

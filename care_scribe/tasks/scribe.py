@@ -91,7 +91,7 @@ def chat_message(provider=plugin_settings.SCRIBE_API_PROVIDER, role="user", text
 @shared_task
 def process_ai_form_fill(external_id):
 
-    form = Scribe.objects.get(external_id=external_id, status=Scribe.Status.READY)
+    form = Scribe.objects.get(external_id=external_id, status=Scribe.Status.READY, live=False)
 
     processing = {
         "created_date" : datetime.datetime.now().isoformat(),
