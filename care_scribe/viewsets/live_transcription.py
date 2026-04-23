@@ -1,6 +1,9 @@
 import logging
+from datetime import UTC, datetime, timedelta
 
+import jwt
 import requests as http_requests
+from django.conf import settings as django_settings
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -242,7 +245,7 @@ class LiveTranscriptionViewSet(ViewSet):
         return Response({"detail": "Session completed successfully."})
 
     def _create_google_session(self, request, session):
-        """Return the middleware WebSocket URL + JWT token for Google STT."""
+        """Return the middleware WebSocket URL + a short-lived scoped JWT for Google STT."""
         middleware_url = plugin_settings.SCRIBE_MIDDLEWARE_URL
         if not middleware_url:
             session.status = Scribe.Status.FAILED
@@ -252,9 +255,21 @@ class LiveTranscriptionViewSet(ViewSet):
                 status=400,
             )
 
-        # Extract the JWT access token from the Authorization header
-        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-        token = auth_header.split(" ", 1)[1] if " " in auth_header else ""
+        # Mint a short-lived, purpose-scoped JWT for the middleware.
+        # This ensures only users who passed quota validation can connect.
+        now = datetime.now(UTC)
+        token_payload = {
+            "user_id": request.user.id,
+            "session_id": str(session.external_id),
+            "purpose": "scribe_middleware",
+            "iat": now,
+            "exp": now + timedelta(seconds=60),
+        }
+        token = jwt.encode(
+            token_payload,
+            django_settings.SECRET_KEY,
+            algorithm="HS256",
+        )
 
         language = request.data.get("language") or None
 
