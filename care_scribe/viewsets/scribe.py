@@ -77,7 +77,9 @@ class ScribeViewset(
         return self.queryset.filter(requested_by=user).select_related("requested_in_facility", "requested_in_encounter__patient")
 
     def perform_create(self, serializer):
-        serializer.save(requested_by=self.request.user)
+        instance = serializer.save(requested_by=self.request.user)
+        if instance.status == Scribe.Status.READY:
+            transaction.on_commit(lambda: process_ai_form_fill.delay(instance.external_id))
 
     def perform_update(self, serializer):
         instance = serializer.save()
