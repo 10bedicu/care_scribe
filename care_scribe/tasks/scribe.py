@@ -108,6 +108,8 @@ def process_ai_form_fill(external_id):
         4. If the audio or image contains no relevant data, return an empty string for the transcription field, and do not assume any context or information.
         5. You do not have to fill all fields. Only fill the fields that are relevant to the encounter. Let the rest have a null value.
 
+        {qn_and_group_descriptions}
+
         Notes Handling:
         - Populate the `note` field only if there is additional context that cannot be captured in the `value`.
         - For example, if the encounter states, “Patient's SPO2 is 20%, but had spiked to 50% an hour ago,” then you should fill `value: 20%` and `note: Spiked to 50% an hour ago`.
@@ -214,10 +216,18 @@ def process_ai_form_fill(external_id):
     total_audio_duration = sum(file.meta.get("length", 0) for file in audio_files)
 
     processed_fields = {}
+    qn_and_group_descriptions = ""
 
     def process_fields(fields: list, indent: int = 0):
+        nonlocal qn_and_group_descriptions
         for fd in fields:
             if "fields" in fd:
+                if "description" in fd and fd["description"] != "":
+                    qn_and_group_descriptions += textwrap.dedent(
+                        f"""
+                        {' ' * indent * 4}For questions under {fd['title']}: {fd['description']}
+                        """
+                    )
                 process_fields(fd["fields"], indent + 1)
             else:
                 schema = fd.get("schema", {})
@@ -225,7 +235,15 @@ def process_ai_form_fill(external_id):
                 processed_fields[field_id] = schema
 
     for qn in form.form_data:
+        if "description" in qn and qn["description"] != "":
+            qn_and_group_descriptions += textwrap.dedent(
+                f"""
+                For questions under {qn['title']}: {qn['description']}
+                """
+            )
         process_fields(qn["fields"])
+
+    base_prompt = base_prompt.replace("{qn_and_group_descriptions}", qn_and_group_descriptions)
 
     processed_fields_no_keys = {f"q{i}": v for i, (k, v) in enumerate(processed_fields.items())}
 
