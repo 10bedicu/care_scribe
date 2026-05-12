@@ -21,7 +21,101 @@ from care_scribe.utils import hash_string
 
 logger = logging.getLogger(__name__)
 
-def ai_client(provider=plugin_settings.SCRIBE_API_PROVIDER):
+def _google_credentials():
+    b64_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_B64")
+    if not b64_credentials:
+        return None
+    info = json.loads(base64.b64decode(b64_credentials).decode("utf-8"))
+    return service_account.Credentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+
+def google_stt_transcribe(audio_file_object, model_name):
+    """Transcribe a single audio file using Google Cloud Speech-to-Text v2."""
+    from google.api_core.client_options import ClientOptions
+    from google.cloud.speech_v2 import SpeechClient
+    from google.cloud.speech_v2.types import cloud_speech
+
+    location = plugin_settings.SCRIBE_GOOGLE_LOCATION or "global"
+    client_options = None
+    if location and location != "global":
+        client_options = ClientOptions(
+            api_endpoint=f"{location}-speech.googleapis.com"
+        )
+    client = SpeechClient(
+        credentials=_google_credentials(), client_options=client_options
+    )
+
+    _, audio_data = audio_file_object.files_manager.file_contents(audio_file_object)
+    recognizer = (
+        f"projects/{plugin_settings.SCRIBE_GOOGLE_PROJECT_ID}"
+        f"/locations/{location}/recognizers/_"
+    )
+    config = cloud_speech.RecognitionConfig(
+        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+        language_codes=[
+            code.strip()
+            for code in (plugin_settings.SCRIBE_GOOGLE_LANGUAGE_CODES or "en-US").split(",")
+            if code.strip()
+        ],
+        model=model_name or "long",
+    )
+    response = client.recognize(
+        request=cloud_speech.RecognizeRequest(
+            recognizer=recognizer,
+            config=config,
+            content=audio_data,
+        )
+    )
+    return " ".join(
+        result.alternatives[0].transcript
+        for result in response.results
+        if result.alternatives
+    )
+
+
+def transcribe_audio_file(audio_file_object, provider, audio_model):
+    """Transcribe a single audio file using the configured provider."""
+    if provider == "google":
+        return google_stt_transcribe(audio_file_object, audio_model)
+
+    client = ai_client(provider)
+    _, audio_file_data = audio_file_object.files_manager.file_contents(
+        audio_file_object
+    )
+    fmt = audio_file_object.internal_name.split(".")[-1]
+    buffer = io.BytesIO(audio_file_data)
+    buffer.name = "file." + fmt
+    # Only whisper-1 supports the /audio/translations endpoint.
+    # Newer models (gpt-4o-transcribe, gpt-4o-mini-transcribe, etc.) are
+    # transcription-only and must use /audio/transcriptions.
+    if audio_model == "whisper-1":
+        transcription = client.audio.translations.create(
+            model=audio_model, file=buffer
+        )
+    else:
+        transcription = client.audio.transcriptions.create(
+            model=audio_model, file=buffer
+        )
+    return transcription.text
+
+
+def _parse_provider_model(value: str):
+    """Split a 'provider/model-name' string into (provider, model).
+
+    The model portion may itself contain '/' characters (kept intact).
+    """
+    if not value or "/" not in value:
+        raise ValueError(
+            f"Expected 'provider/model-name' format, got: {value!r}"
+        )
+    provider, model = value.split("/", 1)
+    if provider == "openai" and plugin_settings.SCRIBE_AZURE_API_KEY:
+        provider = "azure"
+    return provider, model
+
+
+def ai_client(provider):
     if provider == "azure":
         AiClient = AzureOpenAI(
             api_key=plugin_settings.SCRIBE_AZURE_API_KEY,
@@ -34,25 +128,18 @@ def ai_client(provider=plugin_settings.SCRIBE_API_PROVIDER):
         )
 
     elif provider == "google":
-        credentials = None
-        b64_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_B64")
-
-        if b64_credentials:
-            info = json.loads(base64.b64decode(b64_credentials).decode("utf-8"))
-            credentials = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/cloud-platform"])
-
         AiClient = genai.Client(
             vertexai=True,
             project=plugin_settings.SCRIBE_GOOGLE_PROJECT_ID,
             location=plugin_settings.SCRIBE_GOOGLE_LOCATION,
-            credentials=credentials,
+            credentials=_google_credentials(),
         )
 
     else:
         raise Exception("Invalid api provider")
     return AiClient
 
-def chat_message(provider=plugin_settings.SCRIBE_API_PROVIDER, role="user", text=None, file_object=None, file_type="audio"):
+def chat_message(provider, role="user", text=None, file_object=None, file_type="audio"):
     """ Generates a chat message compatible with the given AI provider client."""
     if file_object:
         _, file_data = file_object.files_manager.file_contents(file_object)
@@ -184,34 +271,87 @@ def process_ai_form_fill(external_id):
             form.save()
             return
 
-    api_provider = plugin_settings.SCRIBE_API_PROVIDER
-    chat_model = plugin_settings.SCRIBE_CHAT_MODEL_NAME
-    audio_model = plugin_settings.SCRIBE_AUDIO_MODEL_NAME
+    chat_provider, chat_model = _parse_provider_model(
+        plugin_settings.SCRIBE_CHAT_MODEL_NAME
+    )
+    transcribe_provider, transcribe_model = _parse_provider_model(
+        plugin_settings.SCRIBE_TRANSCRIBE_MODEL_NAME
+    )
     temperature = 0
 
     if form.chat_model:
-        api_provider = form.chat_model.split("/")[0]
-        if api_provider == "openai" and plugin_settings.SCRIBE_AZURE_API_KEY is not "":
-            api_provider = "azure"
-        chat_model = form.chat_model.split("/")[1]
+        chat_provider, chat_model = _parse_provider_model(form.chat_model)
 
     if form.audio_model:
-        audio_model = form.audio_model
+        # Form override may be either "provider/model" or just a model name
+        if "/" in form.audio_model:
+            transcribe_provider, transcribe_model = _parse_provider_model(
+                form.audio_model
+            )
+        else:
+            transcribe_model = form.audio_model
 
     if form.chat_model_temperature is not None:
         temperature = form.chat_model_temperature
 
-    processing["provider"] = api_provider
+    processing["chat_provider"] = chat_provider
     processing["chat_model"] = chat_model
-    processing["audio_model"] = audio_model if api_provider != "google" else None
+    processing["transcribe_provider"] = transcribe_provider
+    processing["transcribe_model"] = (
+        transcribe_model if chat_provider != "google" else None
+    )
     processing["form_data"] = form.form_data
-
-    # Instantiate the AI client once to avoid premature closure and resource management issues,
-    # especially with the Google GenAI provider. Reuse this client instance throughout the function.
-    client = ai_client(api_provider)
 
     audio_files = ScribeFile.objects.filter(external_id__in=form.audio_file_ids)
     total_audio_duration = sum(file.meta.get("length", 0) for file in audio_files)
+
+    if form.transcript_only:
+        logger.info(f"=== Processing transcript-only Scribe {form.external_id} ===")
+        processing["transcript_only"] = True
+        processing["transcribe_model"] = transcribe_model
+        try:
+            form.status = Scribe.Status.GENERATING_TRANSCRIPT
+            form.save()
+            transcript = form.transcript or ""
+            if not transcript:
+                transcription_start = perf_counter()
+                for audio_file_object in audio_files:
+                    transcript += (
+                        transcribe_audio_file(
+                            audio_file_object=audio_file_object,
+                            provider=transcribe_provider,
+                            audio_model=transcribe_model,
+                        )
+                        or ""
+                    )
+                processing["transcription_time"] = perf_counter() - transcription_start
+            form.transcript = transcript
+            form.meta["processings"] = [
+                *form.meta.get("processings", []),
+                processing,
+            ]
+            form.status = Scribe.Status.COMPLETED
+            form.save()
+            if not is_benchmark:
+                user_quota.calculate_used()
+                facility_quota.calculate_used()
+        except Exception as e:
+            logger.error(
+                f"Transcript-only processing failed at line "
+                f"{e.__traceback__.tb_lineno}: {e}"
+            )
+            processing["error"] = str(e)
+            form.meta["processings"] = [
+                *form.meta.get("processings", []),
+                processing,
+            ]
+            form.status = Scribe.Status.FAILED
+            form.save()
+        return
+
+    # Instantiate the AI client once to avoid premature closure and resource management issues,
+    # especially with the Google GenAI provider. Reuse this client instance throughout the function.
+    client = ai_client(chat_provider)
 
     processed_fields = {}
 
@@ -247,7 +387,7 @@ def process_ai_form_fill(external_id):
         # Asking for the full transcription on longer audio would eat up too many tokens.
         output_schema["properties"]["__scribe__transcription"]["description"] = f"A short summarized transcription of the {'image' if len(form.document_file_ids) > 0 else 'audio'} content, focusing on key points and insights in English."
 
-    if api_provider != "google" and len(form.document_file_ids) == 0:
+    if chat_provider != "google" and len(form.document_file_ids) == 0:
         # As we are transcribing using whisper, we do not need the transcription field in the output schema
         del output_schema["properties"]["__scribe__transcription"]
         output_schema["required"].remove("__scribe__transcription")
@@ -261,7 +401,7 @@ def process_ai_form_fill(external_id):
 
     messages.append(
         chat_message(
-            provider=api_provider,
+            provider=chat_provider,
             role="system",
             text=base_prompt,
         )
@@ -270,7 +410,7 @@ def process_ai_form_fill(external_id):
     if form.text:
         messages.append(
             chat_message(
-                provider=api_provider,
+                provider=chat_provider,
                 role="user",
                 text=form.text,
             )
@@ -286,10 +426,10 @@ def process_ai_form_fill(external_id):
 
             for audio_file_object in audio_files:
 
-                if api_provider == "google":
+                if chat_provider == "google":
                     messages.append(
                         chat_message(
-                            provider=api_provider,
+                            provider=chat_provider,
                             role="user",
                             file_object=audio_file_object,
                             file_type="audio",
@@ -297,13 +437,13 @@ def process_ai_form_fill(external_id):
                     )
 
                 else:
-                    _, audio_file_data = audio_file_object.files_manager.file_contents(audio_file_object)
-                    format = audio_file_object.internal_name.split(".")[-1]
-                    buffer = io.BytesIO(audio_file_data)
-                    buffer.name = "file." + format
                     logger.info(f"=== Generating transcript for AI form fill {form.external_id} ===")
                     try:
-                        transcription = client.audio.translations.create(model=audio_model, file=buffer)
+                        transcription_text = transcribe_audio_file(
+                            audio_file_object=audio_file_object,
+                            provider=transcribe_provider,
+                            audio_model=transcribe_model,
+                        )
                     except Exception as e:
                         logger.error(f"Error generating transcript: {e}")
                         processing["error"] = f"Error generating transcript: {e}"
@@ -315,7 +455,7 @@ def process_ai_form_fill(external_id):
                         form.save()
                         return
 
-                    transcript += transcription.text
+                    transcript += transcription_text or ""
                     logger.info(f"Transcript: {transcript}")
 
                     transcription_time = perf_counter() - initiation_time
@@ -333,7 +473,7 @@ def process_ai_form_fill(external_id):
         for document_file_object in document_file_objects:
             messages.append(
                 chat_message(
-                    provider=api_provider,
+                    provider=chat_provider,
                     role="user",
                     file_object=document_file_object,
                     file_type="image",
@@ -343,7 +483,7 @@ def process_ai_form_fill(external_id):
         if transcript != "":
             messages.append(
                 chat_message(
-                    provider=api_provider,
+                    provider=chat_provider,
                     role="user",
                     text=transcript,
                 )
@@ -355,7 +495,7 @@ def process_ai_form_fill(external_id):
 
         completion_start_time = perf_counter()
 
-        if api_provider == "google":
+        if chat_provider == "google":
 
             output_schema_hash = hash_string(json.dumps(output_schema, sort_keys=True))
             try:

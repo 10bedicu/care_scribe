@@ -77,6 +77,7 @@ class ScribeSerializer(serializers.ModelSerializer):
             "chat_model",
             "audio_model",
             "chat_model_temperature",
+            "transcript_only",
             "is_feedback_positive",
             "feedback_comments",
         ]
