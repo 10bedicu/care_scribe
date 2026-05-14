@@ -30,8 +30,8 @@ def _google_credentials():
         info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
 
-def google_stt_transcribe(audio_file_object, model_name):
-    """Transcribe a single audio file using Google Cloud Speech-to-Text v2."""
+def google_stt_translate(audio_file_object, model_name):
+    """Translate a single audio file to English using Google Cloud Speech-to-Text v2."""
     from google.api_core.client_options import ClientOptions
     from google.cloud.speech_v2 import SpeechClient
     from google.cloud.speech_v2.types import cloud_speech
@@ -51,14 +51,18 @@ def google_stt_transcribe(audio_file_object, model_name):
         f"projects/{plugin_settings.SCRIBE_GOOGLE_PROJECT_ID}"
         f"/locations/{location}/recognizers/_"
     )
+    language_codes = [
+        stripped
+        for code in (plugin_settings.SCRIBE_GOOGLE_LANGUAGE_CODES or "en-US").split(",")
+        if (stripped := code.strip()) and stripped.lower() != "auto"
+    ] or ["en-US"]
     config = cloud_speech.RecognitionConfig(
         auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=[
-            code.strip()
-            for code in (plugin_settings.SCRIBE_GOOGLE_LANGUAGE_CODES or "en-US").split(",")
-            if code.strip()
-        ],
+        language_codes=language_codes,
         model=model_name or "long",
+        translation_config=cloud_speech.TranslationConfig(
+            target_language="en-US",
+        ),
     )
     response = client.recognize(
         request=cloud_speech.RecognizeRequest(
@@ -68,7 +72,7 @@ def google_stt_transcribe(audio_file_object, model_name):
         )
     )
     return " ".join(
-        result.alternatives[0].transcript
+        result.alternatives[0].translation
         for result in response.results
         if result.alternatives
     )
@@ -77,7 +81,7 @@ def google_stt_transcribe(audio_file_object, model_name):
 def transcribe_audio_file(audio_file_object, provider, audio_model):
     """Transcribe a single audio file using the configured provider."""
     if provider == "google":
-        return google_stt_transcribe(audio_file_object, audio_model)
+        return google_stt_translate(audio_file_object, audio_model)
 
     client = ai_client(provider)
     _, audio_file_data = audio_file_object.files_manager.file_contents(
