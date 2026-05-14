@@ -152,7 +152,7 @@ DEFAULTS = {
     "SCRIBE_AZURE_ENDPOINT": "",
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
-    "SCRIBE_GOOGLE_LANGUAGE_CODES": "auto",
+    "SCRIBE_GOOGLE_LANGUAGE_CODE": "en-US",
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
 }
 
