@@ -31,7 +31,7 @@ scribe_plug = Plug(
         "SCRIBE_API_PROVIDER": "openai",  # or "azure" or "google"
         "SCRIBE_AUDIO_MODEL_NAME": "",  # model name for speech to text - Not required for Google
         "SCRIBE_CHAT_MODEL_NAME": "",  # model name for chat completion
-        "SCRIBE_TNC" : "" # Terms and Conditions that will be shown to the user before using the plugin. Supports HTML tags.
+        "SCRIBE_TNC" : "", # Terms and Conditions that will be shown to the user before using the plugin. Supports HTML tags.
 
         # OpenAI Configs
         "SCRIBE_OPENAI_API_KEY": "my-api-key",
