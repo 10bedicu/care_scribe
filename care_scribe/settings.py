@@ -143,6 +143,9 @@ DEFAULTS = {
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
+    "SCRIBE_REALTIME_TRANSCRIPTION_PROVIDER": "openai",
+    "SCRIBE_REALTIME_TRANSCRIPTION_MODEL": "gpt-4o-transcribe",
+    "SCRIBE_MIDDLEWARE_URL": "ws://localhost:8090",
 }
 
 plugin_settings = PluginSettings(

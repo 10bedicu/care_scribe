@@ -129,6 +129,7 @@ class Scribe(BaseModel):
     feedback_comments = models.TextField(null=True, blank=True, help_text="Details of the feedback provided by the user")
     chat_input_tokens = models.IntegerField(null=True, blank=True, help_text="Number of tokens used in the chat input")
     chat_output_tokens = models.IntegerField(null=True, blank=True, help_text="Number of tokens used in the chat output")
+    live = models.BooleanField(default=False, help_text="Whether this is a live transcription scribe")
 
     @property
     def audio_file_ids(self):
