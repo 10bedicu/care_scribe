@@ -21,7 +21,7 @@ class ScribeFile(BaseModel):
     internal_name = models.CharField(max_length=2000)
     associating_id = models.CharField(max_length=100, blank=False, null=False)
     file_type = models.IntegerField(choices=FileType.choices, default=FileType.SCRIBE_AUDIO)
-    mime_type = models.CharField(max_length=200, blank=True, null=True)
+    mime_type = models.CharField(max_length=200)
     signed_url = models.CharField(max_length=2000, blank=True, null=True)
     upload_completed = models.BooleanField(default=False)
 
