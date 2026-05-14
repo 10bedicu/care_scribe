@@ -4,7 +4,7 @@ from rest_framework.mixins import (
     RetrieveModelMixin,
     UpdateModelMixin,
 )
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.viewsets import GenericViewSet
 
 from care_scribe.models.scribe import Scribe
@@ -17,9 +17,15 @@ from rest_framework.pagination import LimitOffsetPagination
 from django_filters import rest_framework as filters
 from django.db import transaction
 from django.db.models import Q
+from rest_framework.decorators import action
 
 
 class ScribeFilter(filters.FilterSet):
+    username = filters.CharFilter(
+        field_name="requested_by__username",
+        lookup_expr="icontains",
+        label="Requested By Username",
+    )
     status = filters.ChoiceFilter(
         field_name="status",
         choices=Scribe.Status.choices,
@@ -61,6 +67,9 @@ class ScribeViewset(
     serializer_class = ScribeSerializer
     lookup_field = "external_id"
     permission_classes = [IsAuthenticated]
+    permission_action_classes = {
+        "all": [IsAdminUser()],
+    }
     filter_backends = [
         DjangoFilterBackend,
         rest_framework_filters.OrderingFilter,
@@ -70,10 +79,19 @@ class ScribeViewset(
 
     def get_queryset(self):
         user = self.request.user
-        return self.queryset.filter(requested_by=user).select_related("requested_in_facility", "requested_in_encounter__patient")
+        qs = self.queryset
+        if self.action != "all" and not (self.action == "retrieve" and user.is_superuser):
+            qs = self.queryset.filter(requested_by=user)
+
+        return qs.select_related("requested_in_facility", "requested_in_encounter__patient")
 
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)
+
+    @action(methods=["GET"], detail=False)
+    def all(self, request, *args, **kwargs):
+        # return list view
+        return self.list(request, *args, **kwargs)
 
     def perform_update(self, serializer):
         instance = serializer.save()

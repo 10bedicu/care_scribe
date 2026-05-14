@@ -2,6 +2,7 @@ import jsonschema
 from care.utils.models.base import BaseModel
 from care.facility.models.facility import Facility
 from care.emr.models.encounter import Encounter
+from care.emr.models.questionnaire import Questionnaire
 from django.contrib.auth import get_user_model
 from django.db import models
 
@@ -113,6 +114,7 @@ class Scribe(BaseModel):
     requested_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     requested_in_facility = models.ForeignKey(Facility, null=True, on_delete=models.SET_NULL)
     requested_in_encounter = models.ForeignKey(Encounter, null=True, on_delete=models.SET_NULL)
+    requested_in_questionnaires = models.ManyToManyField(Questionnaire, blank=True, related_name='scribes')
 
     form_data = models.JSONField(validators=[validate_json_schema], null=True, blank=True)
     transcript = models.TextField(null=True, blank=True)
