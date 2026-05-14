@@ -91,7 +91,7 @@ def chat_message(provider=plugin_settings.SCRIBE_API_PROVIDER, role="user", text
 @shared_task
 def process_ai_form_fill(external_id):
 
-    form = Scribe.objects.get(external_id=external_id, status=Scribe.Status.READY)
+    form = Scribe.objects.get(external_id=external_id, status=Scribe.Status.READY, live=False)
 
     processing = {
         "created_date" : datetime.datetime.now().isoformat(),
@@ -127,8 +127,8 @@ def process_ai_form_fill(external_id):
     user_quota = None
     facility_quota = None
 
-    if not form.audio_file_ids and not form.document_file_ids:
-        processing["error"] = "No audio or documents associated with the Scribe. Your upload might have failed."
+    if not form.audio_file_ids and not form.document_file_ids and not form.transcript:
+        processing["error"] = "No audio, documents, or transcript associated with the Scribe. Your upload might have failed."
         form.meta["processings"] = [
             *form.meta.get("processings", []),
             processing
@@ -470,7 +470,7 @@ def process_ai_form_fill(external_id):
 
         else:
             # These models do not support setting a temperature
-            no_temp_models = ["gpt-5", "gpt-5-mini", "gpt-5-nano"]
+            no_temp_models = ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.5"]
 
             ai_response = client.chat.completions.create(
                 model=chat_model,

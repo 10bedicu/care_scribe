@@ -19,6 +19,7 @@ class ScribeQuota(BaseModel):
     tokens_per_user = models.IntegerField(default=0, help_text="Tokens available per user in the facility")
     used = models.IntegerField(default=0, help_text="Tokens used by the user/facility in the current month")
     allow_ocr = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use OCR features")
+    enable_live_transcription = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use live transcription")
 
     tnc_hash = models.CharField(max_length=255, null=True, blank=True, help_text="Hash of the terms and conditions accepted by the user")
     tnc_accepted_date = models.DateTimeField(null=True, blank=True, help_text="Date when the terms and conditions were accepted by the user")
