@@ -124,6 +124,10 @@ class Scribe(BaseModel):
     chat_model = models.CharField(max_length=100, null=True, blank=True)
     audio_model = models.CharField(max_length=100, null=True, blank=True)
     chat_model_temperature = models.FloatField(null=True, blank=True)
+    transcript_only = models.BooleanField(
+        default=False,
+        help_text="If True, only transcribe the audio without running any AI form-fill processing.",
+    )
 
     is_feedback_positive = models.BooleanField(null=True, blank=True, help_text="Whether the user has given positive feedback on the AI response")
     feedback_comments = models.TextField(null=True, blank=True, help_text="Details of the feedback provided by the user")
