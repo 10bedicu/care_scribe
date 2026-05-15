@@ -30,58 +30,71 @@ def _google_credentials():
         info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
 
-def google_stt_translate(audio_file_object, model_name):
-    """Translate a single audio file using Google Cloud Speech-to-Text v2.
+def _google_llm_transcribe(audio_file_object, model_name):
+    """Transcribe a single audio file using a Google Gemini model.
 
-    The audio is auto-detected as any source language and translated into the
-    language configured via ``SCRIBE_GOOGLE_LANGUAGE_CODE`` (defaults to ``en-US``).
+    The audio is sent to the configured Gemini model with a prompt instructing
+    it to return ONLY the transcribed text. If ``SCRIBE_TRANSCRIBE_LANGUAGE``
+    is set, the model is asked to translate into that language; otherwise the
+    transcript is returned in the original spoken language.
     """
-    from google.api_core.client_options import ClientOptions
-    from google.cloud.speech_v2 import SpeechClient
-    from google.cloud.speech_v2.types import cloud_speech
-
-    location = plugin_settings.SCRIBE_GOOGLE_LOCATION or "global"
-    client_options = None
-    if location and location != "global":
-        client_options = ClientOptions(
-            api_endpoint=f"{location}-speech.googleapis.com"
-        )
-    client = SpeechClient(
-        credentials=_google_credentials(), client_options=client_options
-    )
+    target_language = (plugin_settings.SCRIBE_TRANSCRIBE_LANGUAGE or "").strip()
 
     _, audio_data = audio_file_object.files_manager.file_contents(audio_file_object)
-    recognizer = (
-        f"projects/{plugin_settings.SCRIBE_GOOGLE_PROJECT_ID}"
-        f"/locations/{location}/recognizers/_"
-    )
-    target_language = plugin_settings.SCRIBE_GOOGLE_LANGUAGE_CODE or "en-US"
-    config = cloud_speech.RecognitionConfig(
-        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
-        language_codes=["auto"],
-        model=model_name or "long",
-        translation_config=cloud_speech.TranslationConfig(
-            target_language=target_language,
+    fmt = audio_file_object.internal_name.split(".")[-1]
+
+    client = ai_client("google")
+    if target_language:
+        prompt = (
+            "You are an audio transcription engine. Transcribe the provided "
+            f"audio and translate the transcript into the language with BCP-47 "
+            f"code '{target_language}'.\n"
+            "Strict output rules:\n"
+            f"- Output ONLY the final transcript in '{target_language}'.\n"
+            "- Do NOT include the original-language transcription.\n"
+            "- Do NOT include both languages or any side-by-side text.\n"
+            "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
+            "- If the audio is empty or unintelligible, output an empty string."
+        )
+    else:
+        prompt = (
+            "You are an audio transcription engine. Transcribe the provided "
+            "audio in the original spoken language. Do not translate.\n"
+            "Strict output rules:\n"
+            "- Output ONLY the transcript text.\n"
+            "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
+            "- If the audio is empty or unintelligible, output an empty string."
+        )
+    response = client.models.generate_content(
+        model=model_name,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=prompt),
+                    types.Part.from_bytes(
+                        data=audio_data,
+                        mime_type=f"audio/{fmt}",
+                    ),
+                ],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            temperature=0,
+            thinking_config=(
+                types.ThinkingConfig(thinking_budget=0)
+                if "2.5" in model_name and "pro" not in model_name
+                else None
+            ),
         ),
     )
-    response = client.recognize(
-        request=cloud_speech.RecognizeRequest(
-            recognizer=recognizer,
-            config=config,
-            content=audio_data,
-        )
-    )
-    return " ".join(
-        result.alternatives[0].translation
-        for result in response.results
-        if result.alternatives
-    )
+    return (response.text or "").strip()
 
 
 def transcribe_audio_file(audio_file_object, provider, audio_model):
     """Transcribe a single audio file using the configured provider."""
     if provider == "google":
-        return google_stt_translate(audio_file_object, audio_model)
+        return _google_llm_transcribe(audio_file_object, audio_model)
 
     client = ai_client(provider)
     _, audio_file_data = audio_file_object.files_manager.file_contents(
