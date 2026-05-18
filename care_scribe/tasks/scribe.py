@@ -54,7 +54,7 @@ def _google_llm_transcribe(audio_file_object, model_name):
             "- Do NOT include the original-language transcription.\n"
             "- Do NOT include both languages or any side-by-side text.\n"
             "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
-            "- If the audio is empty or unintelligible, output an empty string."
+            "- If the audio is empty or unintelligible, or contains no speech, output an empty string."
         )
     else:
         prompt = (
@@ -63,7 +63,7 @@ def _google_llm_transcribe(audio_file_object, model_name):
             "Strict output rules:\n"
             "- Output ONLY the transcript text.\n"
             "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
-            "- If the audio is empty or unintelligible, output an empty string."
+            "- If the audio is empty or unintelligible, or contains no speech, output an empty string."
         )
     response = client.models.generate_content(
         model=model_name,
