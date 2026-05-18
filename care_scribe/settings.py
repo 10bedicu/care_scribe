@@ -86,21 +86,32 @@ class PluginSettings:  # pragma: no cover
                     f'Please set the "{setting}" in the environment or the {PLUGIN_NAME} plugin config.'
                 )
 
-        if getattr(self, "SCRIBE_API_PROVIDER") not in ("openai", "azure", "google"):
+        valid_providers = ("openai", "azure", "google")
+        providers_in_use = set()
+
+        for setting_name in ("SCRIBE_CHAT_MODEL_NAME", "SCRIBE_TRANSCRIBE_MODEL_NAME"):
+            value = getattr(self, setting_name)
+            if "/" not in value:
+                raise ImproperlyConfigured(
+                    f'Invalid value for "{setting_name}". '
+                    f'Expected format "provider/model-name" '
+                    f'(provider must be one of {valid_providers}).'
+                )
+            provider = value.split("/", 1)[0]
+            if provider not in valid_providers:
+                raise ImproperlyConfigured(
+                    f'Invalid provider "{provider}" in "{setting_name}". '
+                    f'Provider must be one of {valid_providers}.'
+                )
+            providers_in_use.add(provider)
+
+        if "openai" in providers_in_use and not getattr(self, "SCRIBE_OPENAI_API_KEY"):
             raise ImproperlyConfigured(
-                'Invalid value for "SCRIBE_API_PROVIDER". '
-                'Please set the "SCRIBE_API_PROVIDER" to "openai", "google" or "azure".'
+                'The "SCRIBE_OPENAI_API_KEY" setting is required when using OpenAI API. '
+                f'Please set it in the environment or the {PLUGIN_NAME} plugin config.'
             )
 
-        if getattr(self, "SCRIBE_API_PROVIDER") == "openai":
-            for setting in ("SCRIBE_OPENAI_API_KEY",):
-                if not getattr(self, setting):
-                    raise ImproperlyConfigured(
-                        f'The "{setting}" setting is required when using OpenAI API. '
-                        f'Please set the "{setting}" in the environment or the {PLUGIN_NAME} plugin config.'
-                    )
-
-        if getattr(self, "SCRIBE_API_PROVIDER") == "azure":
+        if "azure" in providers_in_use:
             for setting in ("SCRIBE_AZURE_API_VERSION", "SCRIBE_AZURE_ENDPOINT", "SCRIBE_AZURE_API_KEY"):
                 if not getattr(self, setting):
                     raise ImproperlyConfigured(
@@ -108,7 +119,7 @@ class PluginSettings:  # pragma: no cover
                         f'Please set the "{setting}" in the environment or the {PLUGIN_NAME} plugin config.'
                     )
 
-        if getattr(self, "SCRIBE_API_PROVIDER") == "google":
+        if "google" in providers_in_use:
             for setting in ("SCRIBE_GOOGLE_PROJECT_ID", "SCRIBE_GOOGLE_LOCATION"):
                 if not getattr(self, setting):
                     raise ImproperlyConfigured(
@@ -129,19 +140,19 @@ class PluginSettings:  # pragma: no cover
 
 REQUIRED_SETTINGS = {
     "SCRIBE_CHAT_MODEL_NAME",
-    "SCRIBE_API_PROVIDER",
+    "SCRIBE_TRANSCRIBE_MODEL_NAME",
 }
 
 DEFAULTS = {
     "SCRIBE_OPENAI_API_KEY": "",
     "SCRIBE_AZURE_API_KEY": "",
-    "SCRIBE_AUDIO_MODEL_NAME": "whisper-1",
-    "SCRIBE_CHAT_MODEL_NAME": "gpt-4o",
-    "SCRIBE_API_PROVIDER": "openai",
+    "SCRIBE_TRANSCRIBE_MODEL_NAME": "openai/whisper-1",
+    "SCRIBE_CHAT_MODEL_NAME": "openai/gpt-4o",
     "SCRIBE_AZURE_API_VERSION": "",
     "SCRIBE_AZURE_ENDPOINT": "",
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
+    "SCRIBE_TRANSCRIBE_LANGUAGE": "", # only works for google. OpenAI can return source language or only translate to English.
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
 }
 
