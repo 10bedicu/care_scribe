@@ -142,6 +142,7 @@ DEFAULTS = {
     "SCRIBE_AZURE_ENDPOINT": "",
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
+    "SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64": "",
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
 }
 
