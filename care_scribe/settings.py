@@ -153,6 +153,7 @@ DEFAULTS = {
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
     "SCRIBE_TRANSCRIBE_LANGUAGE": "", # only works for google. OpenAI can return source language or only translate to English.
+    "SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64": "",
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
 }
 

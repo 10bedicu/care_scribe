@@ -26,9 +26,36 @@ def _google_credentials():
     if not b64_credentials:
         return None
     info = json.loads(base64.b64decode(b64_credentials).decode("utf-8"))
-    return service_account.Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-    )
+    credentials = None
+
+    b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
+
+    if b64_credentials:
+        try:
+            decoded = base64.b64decode(b64_credentials, validate=True).decode("utf-8")
+        except Exception as e:
+            raise Exception(
+                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not valid base64. "
+                f"({e})"
+            ) from e
+        try:
+            info = json.loads(decoded)
+        except Exception as e:
+            raise Exception(
+                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 did not decode to valid JSON. "
+                f"({e})"
+            ) from e
+        try:
+            credentials = service_account.Credentials.from_service_account_info(
+                info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+        except Exception as e:
+            raise Exception(
+                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not a valid "
+                "service-account key (private_key could not be parsed). "
+                f"({e})"
+            ) from e
+    return credentials
 
 def _google_llm_transcribe(audio_file_object, model_name):
     """Transcribe a single audio file using a Google Gemini model.
@@ -368,7 +395,18 @@ def process_ai_form_fill(external_id):
 
     # Instantiate the AI client once to avoid premature closure and resource management issues,
     # especially with the Google GenAI provider. Reuse this client instance throughout the function.
-    client = ai_client(chat_provider)
+    try:
+        client = ai_client(chat_provider)
+    except Exception as e:
+        logger.exception(f"Scribe {form.external_id}: failed to initialize AI client ({chat_provider}): {e}")
+        processing["error"] = f"Failed to initialize AI client: {e}"
+        form.meta["processings"] = [
+            *form.meta.get("processings", []),
+            processing,
+        ]
+        form.status = Scribe.Status.FAILED
+        form.save()
+        return
 
     processed_fields = {}
 
