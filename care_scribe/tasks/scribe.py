@@ -473,7 +473,6 @@ def process_ai_form_fill(external_id):
                         return
 
                     transcript += transcription_text or ""
-                    logger.info(f"Transcript: {transcript}")
 
                     transcription_time = perf_counter() - initiation_time
                     processing["transcription_time"] = transcription_time
@@ -651,7 +650,6 @@ def process_ai_form_fill(external_id):
                 ai_response_json = json.loads(ai_response.choices[0].message.content)
 
             except Exception as e:
-                logger.error(f"Response: {ai_response}")
                 raise e
 
             if not form.transcript and not transcript:
@@ -663,8 +661,6 @@ def process_ai_form_fill(external_id):
             processing["completion_cached_tokens"] = ai_response.usage.prompt_tokens_details.cached_tokens
             form.chat_input_tokens = ai_response.usage.prompt_tokens
             form.chat_output_tokens = ai_response.usage.completion_tokens
-
-        logger.info(f"AI response: {ai_response_json}")
 
     except Exception as e:
         # Log the error or handle it as needed
