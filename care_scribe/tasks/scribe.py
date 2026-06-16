@@ -3,6 +3,7 @@ import datetime
 import json
 import logging
 import io
+import os
 import re
 import textwrap
 from time import perf_counter
@@ -34,7 +35,13 @@ def ai_client(provider=plugin_settings.SCRIBE_API_PROVIDER):
 
     elif provider == "google":
         credentials = None
-        b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
+        # Respect plugin settings first (which also resolves SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
+        # from the environment), then fall back to the legacy GOOGLE_APPLICATION_CREDENTIALS_B64
+        # env var for backward compatibility with existing deployments.
+        b64_credentials = (
+            plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS_B64")
+        )
 
         if b64_credentials:
             try:
