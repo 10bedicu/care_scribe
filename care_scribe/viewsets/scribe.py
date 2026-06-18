@@ -44,6 +44,10 @@ class ScribeFilter(filters.FilterSet):
         label="Benchmark",
         method="filter_benchmark",
     )
+    transcript_only = filters.BooleanFilter(
+        field_name="transcript_only",
+        label="Transcript Only",
+    )
 
     def filter_benchmark(self, queryset, name, value):
         q = Q(meta__has_key="benchmark")
