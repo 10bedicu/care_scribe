@@ -3,7 +3,6 @@ import datetime
 import json
 import logging
 import io
-import os
 import re
 import textwrap
 from time import perf_counter
@@ -22,40 +21,34 @@ from care_scribe.utils import hash_string
 logger = logging.getLogger(__name__)
 
 def _google_credentials():
-    b64_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_B64")
+    b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
     if not b64_credentials:
         return None
-    info = json.loads(base64.b64decode(b64_credentials).decode("utf-8"))
-    credentials = None
 
-    b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
-
-    if b64_credentials:
-        try:
-            decoded = base64.b64decode(b64_credentials, validate=True).decode("utf-8")
-        except Exception as e:
-            raise Exception(
-                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not valid base64. "
-                f"({e})"
-            ) from e
-        try:
-            info = json.loads(decoded)
-        except Exception as e:
-            raise Exception(
-                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 did not decode to valid JSON. "
-                f"({e})"
-            ) from e
-        try:
-            credentials = service_account.Credentials.from_service_account_info(
-                info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            )
-        except Exception as e:
-            raise Exception(
-                "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not a valid "
-                "service-account key (private_key could not be parsed). "
-                f"({e})"
-            ) from e
-    return credentials
+    try:
+        decoded = base64.b64decode(b64_credentials, validate=True).decode("utf-8")
+    except Exception as e:
+        raise Exception(
+            "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not valid base64. "
+            f"({e})"
+        ) from e
+    try:
+        info = json.loads(decoded)
+    except Exception as e:
+        raise Exception(
+            "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 did not decode to valid JSON. "
+            f"({e})"
+        ) from e
+    try:
+        return service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+    except Exception as e:
+        raise Exception(
+            "Scribe credential error: SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64 is not a valid "
+            "service-account key (private_key could not be parsed). "
+            f"({e})"
+        ) from e
 
 def _google_llm_transcribe(audio_file_object, model_name):
     """Transcribe a single audio file using a Google Gemini model.
