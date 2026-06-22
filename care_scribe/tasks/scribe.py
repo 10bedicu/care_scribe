@@ -50,6 +50,42 @@ def _google_credentials():
             f"({e})"
         ) from e
 
+def _normalize_google_transcription_usage(usage_metadata):
+    if usage_metadata is None:
+        return None
+    details = usage_metadata.prompt_tokens_details or []
+    audio_tokens = sum(
+        d.token_count for d in details
+        if d.modality == types.MediaModality.AUDIO and d.token_count is not None
+    )
+    text_tokens = sum(
+        d.token_count for d in details
+        if d.modality == types.MediaModality.TEXT and d.token_count is not None
+    )
+    return {
+        "input_tokens": usage_metadata.prompt_token_count,
+        "audio_input_tokens": audio_tokens or None,
+        "text_input_tokens": text_tokens or None,
+        "output_tokens": usage_metadata.candidates_token_count,
+        "total_tokens": usage_metadata.total_token_count,
+        "cached_tokens": usage_metadata.cached_content_token_count,
+    }
+
+
+def _normalize_openai_transcription_usage(usage):
+    if usage is None:
+        return None
+    details = getattr(usage, "input_token_details", None)
+    return {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "audio_input_tokens": getattr(details, "audio_tokens", None) if details else None,
+        "text_input_tokens": getattr(details, "text_tokens", None) if details else None,
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+        "cached_tokens": None,
+    }
+
+
 def _google_llm_transcribe(audio_file_object, model_name):
     """Transcribe a single audio file using a Google Gemini model.
 
@@ -57,6 +93,8 @@ def _google_llm_transcribe(audio_file_object, model_name):
     it to return ONLY the transcribed text. If ``SCRIBE_TRANSCRIBE_LANGUAGE``
     is set, the model is asked to translate into that language; otherwise the
     transcript is returned in the original spoken language.
+
+    Returns a dict with ``text``, ``prompt`` and ``usage`` keys.
     """
     target_language = (plugin_settings.SCRIBE_TRANSCRIBE_LANGUAGE or "").strip()
 
@@ -108,11 +146,20 @@ def _google_llm_transcribe(audio_file_object, model_name):
             ),
         ),
     )
-    return (response.text or "").strip()
+    return {
+        "text": (response.text or "").strip(),
+        "prompt": prompt,
+        "usage": _normalize_google_transcription_usage(response.usage_metadata),
+    }
 
 
 def transcribe_audio_file(audio_file_object, provider, audio_model):
-    """Transcribe a single audio file using the configured provider."""
+    """Transcribe a single audio file using the configured provider.
+
+    Returns a dict with ``text``, ``prompt`` and ``usage`` keys. ``prompt``
+    and ``usage`` may be ``None`` when the underlying provider does not
+    expose them (e.g. ``whisper-1``).
+    """
     if provider == "google":
         return _google_llm_transcribe(audio_file_object, audio_model)
 
@@ -134,7 +181,13 @@ def transcribe_audio_file(audio_file_object, provider, audio_model):
         transcription = client.audio.transcriptions.create(
             model=audio_model, file=buffer
         )
-    return transcription.text
+    return {
+        "text": transcription.text,
+        "prompt": None,
+        "usage": _normalize_openai_transcription_usage(
+            getattr(transcription, "usage", None)
+        ),
+    }
 
 
 def _parse_provider_model(value: str):
@@ -335,7 +388,9 @@ def process_ai_form_fill(external_id):
     processing["chat_model"] = chat_model
     processing["transcribe_provider"] = transcribe_provider
     processing["transcribe_model"] = (
-        transcribe_model if chat_provider != "google" else None
+        transcribe_model
+        if form.transcript_only or chat_provider != "google"
+        else None
     )
     processing["form_data"] = form.form_data
 
@@ -345,24 +400,59 @@ def process_ai_form_fill(external_id):
     if form.transcript_only:
         logger.info(f"=== Processing transcript-only Scribe {form.external_id} ===")
         processing["transcript_only"] = True
-        processing["transcribe_model"] = transcribe_model
+        processing["audio_duration"] = total_audio_duration
         try:
             form.status = Scribe.Status.GENERATING_TRANSCRIPT
             form.save()
             transcript = form.transcript or ""
             if not transcript:
                 transcription_start = perf_counter()
+                transcription_prompt = None
+                input_tokens_total = 0
+                output_tokens_total = 0
+                total_tokens_total = 0
+                audio_input_tokens_total = 0
+                text_input_tokens_total = 0
+                cached_tokens_total = 0
+                has_usage = False
                 for audio_file_object in audio_files:
-                    transcript += (
-                        transcribe_audio_file(
-                            audio_file_object=audio_file_object,
-                            provider=transcribe_provider,
-                            audio_model=transcribe_model,
-                        )
-                        or ""
+                    result = transcribe_audio_file(
+                        audio_file_object=audio_file_object,
+                        provider=transcribe_provider,
+                        audio_model=transcribe_model,
                     )
+                    transcript += result["text"] or ""
+                    if result.get("prompt") and transcription_prompt is None:
+                        transcription_prompt = result["prompt"]
+                    usage = result.get("usage")
+                    if usage:
+                        has_usage = True
+                        input_tokens_total += usage.get("input_tokens") or 0
+                        output_tokens_total += usage.get("output_tokens") or 0
+                        total_tokens_total += usage.get("total_tokens") or 0
+                        audio_input_tokens_total += usage.get("audio_input_tokens") or 0
+                        text_input_tokens_total += usage.get("text_input_tokens") or 0
+                        cached_tokens_total += usage.get("cached_tokens") or 0
                 processing["transcription_time"] = perf_counter() - transcription_start
+                if transcription_prompt:
+                    processing["prompt"] = transcription_prompt
+                if has_usage:
+                    processing["completion_input_tokens"] = input_tokens_total
+                    processing["completion_output_tokens"] = output_tokens_total
+                    processing["completion_total_tokens"] = total_tokens_total
+                    processing["completion_audio_input_tokens"] = (
+                        audio_input_tokens_total or None
+                    )
+                    processing["completion_text_input_tokens"] = (
+                        text_input_tokens_total or None
+                    )
+                    processing["completion_cached_tokens"] = (
+                        cached_tokens_total or None
+                    )
+                    form.chat_input_tokens = input_tokens_total
+                    form.chat_output_tokens = output_tokens_total
             form.transcript = transcript
+            processing["ai_response"] = transcript
             form.meta["processings"] = [
                 *form.meta.get("processings", []),
                 processing,
@@ -487,11 +577,12 @@ def process_ai_form_fill(external_id):
                 else:
                     logger.info(f"=== Generating transcript for AI form fill {form.external_id} ===")
                     try:
-                        transcription_text = transcribe_audio_file(
+                        transcription_result = transcribe_audio_file(
                             audio_file_object=audio_file_object,
                             provider=transcribe_provider,
                             audio_model=transcribe_model,
                         )
+                        transcription_text = transcription_result["text"]
                     except Exception as e:
                         logger.error(f"Error generating transcript: {e}")
                         processing["error"] = f"Error generating transcript: {e}"
