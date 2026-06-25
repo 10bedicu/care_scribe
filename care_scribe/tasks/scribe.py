@@ -20,6 +20,8 @@ from care_scribe.utils import hash_string
 
 logger = logging.getLogger(__name__)
 
+TRANSCRIPT_ONLY_TRANSCRIBE_TEMPERATURE = 0.1
+
 def _google_credentials():
     b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
     if not b64_credentials:
@@ -86,7 +88,7 @@ def _normalize_openai_transcription_usage(usage):
     }
 
 
-def _google_llm_transcribe(audio_file_object, model_name):
+def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
     """Transcribe a single audio file using a Google Gemini model.
 
     The audio is sent to the configured Gemini model with a prompt instructing
@@ -94,7 +96,7 @@ def _google_llm_transcribe(audio_file_object, model_name):
     is set, the model is asked to translate into that language; otherwise the
     transcript is returned in the original spoken language.
 
-    Returns a dict with ``text``, ``prompt`` and ``usage`` keys.
+    Returns a dict with ``text``, ``prompt``, ``usage`` and ``id`` keys.
     """
     target_language = (plugin_settings.SCRIBE_TRANSCRIBE_LANGUAGE or "").strip()
 
@@ -123,6 +125,17 @@ def _google_llm_transcribe(audio_file_object, model_name):
             "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
             "- If the audio is empty or unintelligible, or contains no speech, output an empty string."
         )
+
+    # Cap output length as a hard safety net against runaway token-repetition
+    # loops on highly repetitive speech. The bound scales with audio length at a
+    # very generous ~30 tokens/sec (~8x typical speech, with headroom for fast /
+    # multilingual speech) and a floor so short clips are never truncated. Falls
+    # back to no cap when the audio length is unknown.
+    audio_length_ms = audio_file_object.meta.get("length", 0) or 0
+    max_output_tokens = (
+        max(512, int(audio_length_ms / 1000 * 30)) if audio_length_ms else None
+    )
+
     response = client.models.generate_content(
         model=model_name,
         contents=[
@@ -138,7 +151,8 @@ def _google_llm_transcribe(audio_file_object, model_name):
             )
         ],
         config=types.GenerateContentConfig(
-            temperature=0,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
             thinking_config=(
                 types.ThinkingConfig(thinking_budget=0)
                 if "2.5" in model_name and "pro" not in model_name
@@ -150,18 +164,21 @@ def _google_llm_transcribe(audio_file_object, model_name):
         "text": (response.text or "").strip(),
         "prompt": prompt,
         "usage": _normalize_google_transcription_usage(response.usage_metadata),
+        "id": response.response_id,
     }
 
 
-def transcribe_audio_file(audio_file_object, provider, audio_model):
+def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=0):
     """Transcribe a single audio file using the configured provider.
 
-    Returns a dict with ``text``, ``prompt`` and ``usage`` keys. ``prompt``
-    and ``usage`` may be ``None`` when the underlying provider does not
-    expose them (e.g. ``whisper-1``).
+    Returns a dict with ``text``, ``prompt``, ``usage`` and ``id`` keys.
+    ``prompt`` and ``usage`` may be ``None`` when the underlying provider does
+    not expose them (e.g. ``whisper-1``).
     """
     if provider == "google":
-        return _google_llm_transcribe(audio_file_object, audio_model)
+        return _google_llm_transcribe(
+            audio_file_object, audio_model, temperature=temperature
+        )
 
     client = ai_client(provider)
     _, audio_file_data = audio_file_object.files_manager.file_contents(
@@ -175,11 +192,11 @@ def transcribe_audio_file(audio_file_object, provider, audio_model):
     # transcription-only and must use /audio/transcriptions.
     if audio_model == "whisper-1":
         transcription = client.audio.translations.create(
-            model=audio_model, file=buffer
+            model=audio_model, file=buffer, temperature=temperature
         )
     else:
         transcription = client.audio.transcriptions.create(
-            model=audio_model, file=buffer
+            model=audio_model, file=buffer, temperature=temperature
         )
     return {
         "text": transcription.text,
@@ -187,6 +204,7 @@ def transcribe_audio_file(audio_file_object, provider, audio_model):
         "usage": _normalize_openai_transcription_usage(
             getattr(transcription, "usage", None)
         ),
+        "id": getattr(transcription, "_request_id", None),
     }
 
 
@@ -384,8 +402,6 @@ def process_ai_form_fill(external_id):
     if form.chat_model_temperature is not None:
         temperature = form.chat_model_temperature
 
-    processing["chat_provider"] = chat_provider
-    processing["chat_model"] = chat_model
     processing["transcribe_provider"] = transcribe_provider
     processing["transcribe_model"] = (
         transcribe_model
@@ -393,6 +409,10 @@ def process_ai_form_fill(external_id):
         else None
     )
     processing["form_data"] = form.form_data
+
+    if not form.transcript_only:
+        processing["chat_provider"] = chat_provider
+        processing["chat_model"] = chat_model
 
     audio_files = ScribeFile.objects.filter(external_id__in=form.audio_file_ids)
     total_audio_duration = sum(file.meta.get("length", 0) for file in audio_files)
@@ -414,16 +434,20 @@ def process_ai_form_fill(external_id):
                 audio_input_tokens_total = 0
                 text_input_tokens_total = 0
                 cached_tokens_total = 0
+                transcription_ids = []
                 has_usage = False
                 for audio_file_object in audio_files:
                     result = transcribe_audio_file(
                         audio_file_object=audio_file_object,
                         provider=transcribe_provider,
                         audio_model=transcribe_model,
+                        temperature=TRANSCRIPT_ONLY_TRANSCRIBE_TEMPERATURE,
                     )
                     transcript += result["text"] or ""
                     if result.get("prompt") and transcription_prompt is None:
                         transcription_prompt = result["prompt"]
+                    if result.get("id"):
+                        transcription_ids.append(result["id"])
                     usage = result.get("usage")
                     if usage:
                         has_usage = True
@@ -436,6 +460,8 @@ def process_ai_form_fill(external_id):
                 processing["transcription_time"] = perf_counter() - transcription_start
                 if transcription_prompt:
                     processing["prompt"] = transcription_prompt
+                if transcription_ids:
+                    processing["transcription_ids"] = transcription_ids
                 if has_usage:
                     processing["completion_input_tokens"] = input_tokens_total
                     processing["completion_output_tokens"] = output_tokens_total
