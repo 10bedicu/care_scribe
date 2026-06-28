@@ -127,15 +127,10 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
         )
 
     # Cap output length as a hard safety net against runaway token-repetition
-    # loops on highly repetitive speech. The bound scales with audio length at a
-    # very generous ~30 tokens/sec (~8x typical speech, with headroom for fast /
-    # multilingual speech) and a floor so short clips are never truncated. Falls
-    # back to no cap when the audio length is unknown.
     audio_length_ms = audio_file_object.meta.get("length", 0) or 0
     max_output_tokens = (
-        max(512, int(audio_length_ms / 1000 * 30)) if audio_length_ms else None
+        int(audio_length_ms / 1000 * 5) if audio_length_ms else None
     )
-
     response = client.models.generate_content(
         model=model_name,
         contents=[
