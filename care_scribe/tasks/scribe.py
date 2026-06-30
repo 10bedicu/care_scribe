@@ -114,7 +114,7 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
             "- Do NOT include the original-language transcription.\n"
             "- Do NOT include both languages or any side-by-side text.\n"
             "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
-            "- If the audio is empty or unintelligible, or contains no speech, output an empty string."
+            "- If the audio is empty or unintelligible, or contains no speech, instead of outputting a blank string, output the reason why you could not transcribe the audio with a prefix \"|>\" (e.g., '|> Audio is empty', '|> Audio is unintelligible', '|> No speech detected')."
         )
     else:
         prompt = (
@@ -155,11 +155,17 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
             ),
         ),
     )
+    text = (response.text or "").strip()
+    # When the model cannot transcribe, it returns the reason prefixed with
+    # "|>" (e.g. "|> No speech detected"). Treat these as empty transcripts.
+    if text.startswith("|>"):
+        text = ""
     return {
-        "text": (response.text or "").strip(),
+        "text": text,
         "prompt": prompt,
         "usage": _normalize_google_transcription_usage(response.usage_metadata),
         "id": response.response_id,
+        "alloted_output_tokens": max_output_tokens,
     }
 
 
@@ -200,6 +206,7 @@ def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=
             getattr(transcription, "usage", None)
         ),
         "id": getattr(transcription, "_request_id", None),
+        "alloted_output_tokens": None,
     }
 
 
@@ -429,6 +436,7 @@ def process_ai_form_fill(external_id):
                 audio_input_tokens_total = 0
                 text_input_tokens_total = 0
                 cached_tokens_total = 0
+                alloted_output_tokens_total = 0
                 transcription_ids = []
                 has_usage = False
                 for audio_file_object in audio_files:
@@ -443,6 +451,9 @@ def process_ai_form_fill(external_id):
                         transcription_prompt = result["prompt"]
                     if result.get("id"):
                         transcription_ids.append(result["id"])
+                    alloted_output_tokens_total += (
+                        result.get("alloted_output_tokens") or 0
+                    )
                     usage = result.get("usage")
                     if usage:
                         has_usage = True
@@ -457,6 +468,8 @@ def process_ai_form_fill(external_id):
                     processing["prompt"] = transcription_prompt
                 if transcription_ids:
                     processing["transcription_ids"] = transcription_ids
+                if alloted_output_tokens_total:
+                    processing["transcription_alloted_output_tokens"] = alloted_output_tokens_total
                 if has_usage:
                     processing["completion_input_tokens"] = input_tokens_total
                     processing["completion_output_tokens"] = output_tokens_total
@@ -616,6 +629,15 @@ def process_ai_form_fill(external_id):
                         return
 
                     transcript += transcription_text or ""
+
+                    alloted_output_tokens = transcription_result.get(
+                        "alloted_output_tokens"
+                    )
+                    if alloted_output_tokens is not None:
+                        processing["transcription_alloted_output_tokens"] = (
+                            processing.get("transcription_alloted_output_tokens", 0)
+                            + alloted_output_tokens
+                        )
 
                     transcription_time = perf_counter() - initiation_time
                     processing["transcription_time"] = transcription_time
