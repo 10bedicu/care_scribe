@@ -123,7 +123,7 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
             "Strict output rules:\n"
             "- Output ONLY the transcript text.\n"
             "- Do NOT add explanations, labels, preambles, quotes, or markdown.\n"
-            "- If the audio is empty or unintelligible, or contains no speech, output an empty string."
+            "- If the audio is empty or unintelligible, or contains no speech, instead of outputting a blank string, output the reason why you could not transcribe the audio with a prefix \"|>\" (e.g., '|> Audio is empty', '|> Audio is unintelligible', '|> No speech detected')."
         )
 
     # Cap output length as a hard safety net against runaway token-repetition
