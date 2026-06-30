@@ -165,7 +165,7 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
         "prompt": prompt,
         "usage": _normalize_google_transcription_usage(response.usage_metadata),
         "id": response.response_id,
-        "alloted_output_tokens": max_output_tokens,
+        "allotted_output_tokens": max_output_tokens,
     }
 
 
@@ -206,7 +206,7 @@ def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=
             getattr(transcription, "usage", None)
         ),
         "id": getattr(transcription, "_request_id", None),
-        "alloted_output_tokens": None,
+        "allotted_output_tokens": None,
     }
 
 
@@ -436,7 +436,7 @@ def process_ai_form_fill(external_id):
                 audio_input_tokens_total = 0
                 text_input_tokens_total = 0
                 cached_tokens_total = 0
-                alloted_output_tokens_total = 0
+                allotted_output_tokens_total = 0
                 transcription_ids = []
                 has_usage = False
                 for audio_file_object in audio_files:
@@ -451,8 +451,8 @@ def process_ai_form_fill(external_id):
                         transcription_prompt = result["prompt"]
                     if result.get("id"):
                         transcription_ids.append(result["id"])
-                    alloted_output_tokens_total += (
-                        result.get("alloted_output_tokens") or 0
+                    allotted_output_tokens_total += (
+                        result.get("allotted_output_tokens") or 0
                     )
                     usage = result.get("usage")
                     if usage:
@@ -468,8 +468,8 @@ def process_ai_form_fill(external_id):
                     processing["prompt"] = transcription_prompt
                 if transcription_ids:
                     processing["transcription_ids"] = transcription_ids
-                if alloted_output_tokens_total:
-                    processing["transcription_alloted_output_tokens"] = alloted_output_tokens_total
+                if allotted_output_tokens_total:
+                    processing["transcription_allotted_output_tokens"] = allotted_output_tokens_total
                 if has_usage:
                     processing["completion_input_tokens"] = input_tokens_total
                     processing["completion_output_tokens"] = output_tokens_total
@@ -630,13 +630,13 @@ def process_ai_form_fill(external_id):
 
                     transcript += transcription_text or ""
 
-                    alloted_output_tokens = transcription_result.get(
-                        "alloted_output_tokens"
+                    allotted_output_tokens = transcription_result.get(
+                        "allotted_output_tokens"
                     )
-                    if alloted_output_tokens is not None:
-                        processing["transcription_alloted_output_tokens"] = (
-                            processing.get("transcription_alloted_output_tokens", 0)
-                            + alloted_output_tokens
+                    if allotted_output_tokens is not None:
+                        processing["transcription_allotted_output_tokens"] = (
+                            processing.get("transcription_allotted_output_tokens", 0)
+                            + allotted_output_tokens
                         )
 
                     transcription_time = perf_counter() - initiation_time
