@@ -169,6 +169,206 @@ def _google_llm_transcribe(audio_file_object, model_name, temperature=0):
     }
 
 
+def _is_chirp_model(model_name):
+    """Return ``True`` when the Google model is a Chirp speech-to-text model."""
+    return bool(model_name) and model_name.lower().startswith("chirp")
+
+
+def _resolve_transcribe_from_languages():
+    """Parse ``SCRIBE_TRANSCRIBE_FROM_LANGUAGES`` into a list of BCP-47 codes.
+
+    Returns ``["auto"]`` when the setting is blank/unset so that Chirp performs
+    automatic language detection.
+    """
+    raw = (plugin_settings.SCRIBE_TRANSCRIBE_FROM_LANGUAGES or "").strip()
+    languages = [lang.strip() for lang in raw.split(",") if lang.strip()]
+    return languages or ["auto"]
+
+
+def google_speech_client():
+    """Build a Google Cloud Speech-to-Text v2 client for Chirp models.
+
+    Chirp is served from regional endpoints, so the client is pinned to
+    ``{location}-speech.googleapis.com`` whenever a non-global location is set.
+
+    The REST transport is used instead of the default gRPC transport because
+    google-genai (Gemini) initialises gRPC state that corrupts a subsequent gRPC
+    Speech call in the same worker process (fails with ``TSI_DATA_CORRUPTED`` /
+    ``SSLV3_ALERT_BAD_RECORD_MAC``). REST avoids gRPC entirely.
+    """
+    from google.api_core.client_options import ClientOptions
+    from google.cloud.speech_v2 import SpeechClient
+
+    location = (plugin_settings.SCRIBE_GOOGLE_LOCATION or "").strip()
+    client_options = None
+    if location and location != "global":
+        client_options = ClientOptions(
+            api_endpoint=f"{location}-speech.googleapis.com"
+        )
+    return SpeechClient(
+        credentials=_google_credentials(),
+        client_options=client_options,
+        transport="rest",
+    )
+
+
+def _google_translate_text(text, target_language):
+    """Translate ``text`` into ``target_language`` using the Google Translate v2 API.
+
+    ``target_language`` is a BCP-47 tag (e.g. ``en-US``); Translate v2 expects the
+    primary sub-tag (e.g. ``en``). Returns ``(translated_text, meta)``.
+
+    Translate v2 is billed per character and returns no token usage, so ``meta``
+    reports ``characters`` (the billed unit), the detected source language and the
+    wall-clock ``time`` of the call.
+    """
+    from google.cloud import translate_v2 as translate
+
+    target = target_language.split("-")[0]
+    translate_start = perf_counter()
+    client = translate.Client(credentials=_google_credentials())
+    result = client.translate(text, target_language=target, format_="text")
+    meta = {
+        "target_language": target,
+        "detected_source_language": result.get("detectedSourceLanguage"),
+        "characters": len(text),
+        "time": perf_counter() - translate_start,
+    }
+    return result["translatedText"], meta
+
+
+def _google_chirp_transcribe(audio_file_object, model_name, temperature=0):
+    """Transcribe a single audio file using a Google Chirp model (STT v2).
+
+    The source languages come from ``SCRIBE_TRANSCRIBE_FROM_LANGUAGES`` (at most
+    two BCP-47 codes, or ``auto`` when unset). When ``SCRIBE_TRANSCRIBE_LANGUAGE``
+    is set, the transcript is translated into that language via the Google
+    Translate v2 API.
+
+    Returns the same dict shape as the other transcribers, plus independent
+    metadata keys (no wrapper object). Speech-to-Text v2 (Chirp) is billed by
+    audio duration and returns NO token usage, so the result carries
+    ``stt_billed_audio_seconds`` (the billed unit) and ``stt_time`` alongside the
+    source/detected languages, plus — when translation runs — the Translate v2
+    ``translation_*`` fields (target/detected-source language, characters, time).
+    ``temperature`` is accepted for a consistent signature but is unused by STT.
+    """
+    from google.cloud.speech_v2.types import cloud_speech
+
+    _, audio_data = audio_file_object.files_manager.file_contents(
+        audio_file_object
+    )
+    language_codes = _resolve_transcribe_from_languages()
+
+    project_id = plugin_settings.SCRIBE_GOOGLE_PROJECT_ID
+    location = (plugin_settings.SCRIBE_GOOGLE_LOCATION or "").strip() or "global"
+    recognizer = f"projects/{project_id}/locations/{location}/recognizers/_"
+
+    config = cloud_speech.RecognitionConfig(
+        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+        language_codes=language_codes,
+        model=model_name,
+    )
+    request = cloud_speech.RecognizeRequest(
+        recognizer=recognizer,
+        config=config,
+        content=audio_data,
+    )
+    stt_start = perf_counter()
+    client = google_speech_client()
+    response = client.recognize(request=request)
+    stt_time = perf_counter() - stt_start
+
+    transcript_parts = []
+    detected_languages = []
+    for result in response.results:
+        if result.alternatives:
+            transcript_parts.append(result.alternatives[0].transcript)
+        language_code = getattr(result, "language_code", "")
+        if language_code and language_code not in detected_languages:
+            detected_languages.append(language_code)
+    transcript = " ".join(
+        part.strip() for part in transcript_parts if part and part.strip()
+    ).strip()
+
+    billed_duration = None
+    request_id = None
+    metadata = getattr(response, "metadata", None)
+    if metadata is not None:
+        if metadata.total_billed_duration is not None:
+            billed_duration = metadata.total_billed_duration.total_seconds()
+        request_id = getattr(metadata, "request_id", None) or None
+
+    # Speech-to-Text v2 (Chirp) bills by audio duration and returns no token
+    # usage; ``stt_billed_audio_seconds`` is the usage metric Google reports.
+    translation_target = None
+    translation_source = None
+    translation_characters = None
+    translation_time = None
+
+    target_language = (plugin_settings.SCRIBE_TRANSCRIBE_LANGUAGE or "").strip()
+    if target_language and transcript:
+        transcript, translation_meta = _google_translate_text(
+            transcript, target_language
+        )
+        translation_target = translation_meta["target_language"]
+        translation_source = translation_meta["detected_source_language"]
+        translation_characters = translation_meta["characters"]
+        translation_time = translation_meta["time"]
+
+    return {
+        "text": transcript,
+        "prompt": None,
+        "usage": None,
+        "id": request_id,
+        "allotted_output_tokens": None,
+        "stt_from_languages": language_codes,
+        "stt_detected_languages": detected_languages,
+        "stt_billed_audio_seconds": billed_duration,
+        "stt_time": stt_time,
+        "translation_target_language": translation_target,
+        "translation_detected_source_language": translation_source,
+        "translation_characters": translation_characters,
+        "translation_time": translation_time,
+    }
+
+
+def _merge_transcription_metadata(processing, result):
+    """Store Chirp STT / Translate v2 metadata from a transcribe ``result`` as
+    independent, aggregated keys on ``processing`` (no wrapper object).
+
+    Neither API returns token usage, so only the billed units (audio seconds,
+    characters), timings and languages are recorded. Numeric values are summed
+    across audio files; languages are collected without duplicates. Non-Chirp
+    results (OpenAI/Gemini) carry none of these keys and are left untouched.
+    """
+    def _add(key, value):
+        if value:
+            processing[key] = (processing.get(key) or 0) + value
+
+    def _collect(key, value):
+        if not value:
+            return
+        bucket = processing.setdefault(key, [])
+        for item in value if isinstance(value, list) else [value]:
+            if item and item not in bucket:
+                bucket.append(item)
+
+    if result.get("stt_from_languages") is not None:
+        processing["transcription_from_languages"] = result["stt_from_languages"]
+    _collect("transcription_detected_languages", result.get("stt_detected_languages"))
+    _add("transcription_billed_audio_seconds", result.get("stt_billed_audio_seconds"))
+    _add("transcription_stt_time", result.get("stt_time"))
+    if result.get("translation_target_language"):
+        processing["translation_target_language"] = result["translation_target_language"]
+    _collect(
+        "translation_detected_source_languages",
+        result.get("translation_detected_source_language"),
+    )
+    _add("translation_characters", result.get("translation_characters"))
+    _add("translation_time", result.get("translation_time"))
+
+
 def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=0):
     """Transcribe a single audio file using the configured provider.
 
@@ -177,6 +377,10 @@ def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=
     not expose them (e.g. ``whisper-1``).
     """
     if provider == "google":
+        if _is_chirp_model(audio_model):
+            return _google_chirp_transcribe(
+                audio_file_object, audio_model, temperature=temperature
+            )
         return _google_llm_transcribe(
             audio_file_object, audio_model, temperature=temperature
         )
@@ -463,6 +667,7 @@ def process_ai_form_fill(external_id):
                         audio_input_tokens_total += usage.get("audio_input_tokens") or 0
                         text_input_tokens_total += usage.get("text_input_tokens") or 0
                         cached_tokens_total += usage.get("cached_tokens") or 0
+                    _merge_transcription_metadata(processing, result)
                 processing["transcription_time"] = perf_counter() - transcription_start
                 if transcription_prompt:
                     processing["prompt"] = transcription_prompt
@@ -638,6 +843,8 @@ def process_ai_form_fill(external_id):
                             processing.get("transcription_allotted_output_tokens", 0)
                             + allotted_output_tokens
                         )
+
+                    _merge_transcription_metadata(processing, transcription_result)
 
                     transcription_time = perf_counter() - initiation_time
                     processing["transcription_time"] = transcription_time
