@@ -19,7 +19,7 @@ class ScribeQuota(BaseModel):
     tokens_per_user = models.IntegerField(default=0, help_text="Tokens available per user in the facility")
     used = models.IntegerField(default=0, help_text="Tokens used by the user/facility in the current month")
     allow_ocr = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use OCR features")
-    allow_scribe = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use normal (form-fill) scribes")
+    allow_scribe = models.BooleanField(default=True, help_text="Whether the user/facility is allowed to use normal (form-fill) scribes")
     allow_notes_scribe = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use transcript-only scribes")
 
 
