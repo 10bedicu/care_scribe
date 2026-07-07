@@ -18,6 +18,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='scribequota',
             name='allow_scribe',
-            field=models.BooleanField(default=False, help_text='Whether the user/facility is allowed to use normal (form-fill) scribes'),
+            field=models.BooleanField(default=True, help_text='Whether the user/facility is allowed to use normal (form-fill) scribes'),
         ),
     ]
