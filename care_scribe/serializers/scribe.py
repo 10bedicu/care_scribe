@@ -77,6 +77,7 @@ class ScribeSerializer(serializers.ModelSerializer):
             "chat_model",
             "audio_model",
             "chat_model_temperature",
+            "transcript_only",
             "is_feedback_positive",
             "feedback_comments",
         ]
@@ -135,7 +136,11 @@ class ScribeSerializer(serializers.ModelSerializer):
             if (self.instance and not self.instance.requested_in_facility) and not self.validated_data["requested_in_facility"]:
                 raise serializers.ValidationError({"requested_in_facility": "Invalid facility ID"})
 
-            if (self.instance and not self.instance.requested_in_encounter) and not self.validated_data["requested_in_encounter"]:
+            transcript_only = self.validated_data.get(
+                "transcript_only",
+                self.instance.transcript_only if self.instance else False,
+            )
+            if not transcript_only and (self.instance and not self.instance.requested_in_encounter) and not self.validated_data.get("requested_in_encounter"):
                 raise serializers.ValidationError({"requested_in_encounter": "Invalid encounter ID"})
 
         self.validated_data.pop("requested_in_facility_id", None)

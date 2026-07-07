@@ -21,6 +21,8 @@ class ScribeQuotaSerializer(serializers.ModelSerializer):
             "tokens_per_user",
             "used",
             "allow_ocr",
+            "allow_scribe",
+            "allow_notes_scribe",
             "created_by",
             "created_date",
             "modified_date",
