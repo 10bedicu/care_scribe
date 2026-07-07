@@ -127,18 +127,6 @@ class PluginSettings:  # pragma: no cover
                         f'Please set the "{setting}" in the environment or the {PLUGIN_NAME} plugin config.'
                     )
 
-        from_languages_raw = getattr(self, "SCRIBE_TRANSCRIBE_FROM_LANGUAGES") or ""
-        from_languages = [
-            lang.strip() for lang in from_languages_raw.split(",") if lang.strip()
-        ]
-        if len(from_languages) > 2:
-            raise ImproperlyConfigured(
-                'The "SCRIBE_TRANSCRIBE_FROM_LANGUAGES" setting accepts at most 2 '
-                f"languages, but {len(from_languages)} were provided "
-                f'({", ".join(from_languages)}). Provide one or two BCP-47 codes '
-                '(e.g. "en-IN,hi-IN"), or leave it blank for automatic detection.'
-            )
-
     def reload(self) -> None:
         """
         Deletes the cached attributes so they will be recomputed next time they are accessed.
@@ -165,7 +153,6 @@ DEFAULTS = {
     "SCRIBE_GOOGLE_PROJECT_ID" : "",
     "SCRIBE_GOOGLE_LOCATION" : "",
     "SCRIBE_TRANSCRIBE_LANGUAGE": "", # only works for google. OpenAI can return source language or only translate to English.
-    "SCRIBE_TRANSCRIBE_FROM_LANGUAGES": "", # comma-separated BCP-47 codes (max 2) for Google Chirp source languages; blank => automatic detection.
     "SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64": "",
     "SCRIBE_TNC": "<Please add your terms and conditions here>",
 }
