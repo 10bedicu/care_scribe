@@ -749,6 +749,12 @@ def process_ai_form_fill(external_id):
         if not facility_quota.allow_ocr and not user_quota.allow_ocr and len(form.document_file_ids) > 0:
             error = "OCR is not enabled for this user or facility."
 
+        if form.transcript_only:
+            if not facility_quota.allow_notes_scribe and not user_quota.allow_notes_scribe:
+                error = "Notes scribe is not enabled for this user or facility."
+        elif not facility_quota.allow_scribe and not user_quota.allow_scribe:
+            error = "Scribe is not enabled for this user or facility."
+
         if error:
             processing["error"] = error
             form.meta["processings"] = [
