@@ -22,6 +22,20 @@ logger = logging.getLogger(__name__)
 
 TRANSCRIPT_ONLY_TRANSCRIBE_TEMPERATURE = 0.1
 
+# Google Speech-to-Text v2 synchronous ``recognize`` accepts at most ~60 seconds
+# of audio per request. Longer recordings are transcoded to 16 kHz mono PCM and
+# split into chunks slightly under this limit, transcribed sequentially and
+# stitched back together.
+CHIRP_SYNC_CHUNK_SECONDS = 55
+CHIRP_TARGET_SAMPLE_RATE = 16000
+
+# Chirp (Speech-to-Text v2) bills by audio duration and Translate v2 by
+# character count; neither returns token usage. Scribe quota is tracked in
+# tokens, so these fixed rates convert each billed unit into equivalent tokens
+# so Chirp scribes still consume quota.
+CHIRP_TOKENS_PER_AUDIO_SECOND = 889
+TRANSLATE_TOKENS_PER_CHARACTER = 67
+
 def _google_credentials():
     b64_credentials = plugin_settings.SCRIBE_GOOGLE_APPLICATION_CREDENTIALS_B64
     if not b64_credentials:
@@ -212,24 +226,34 @@ def google_speech_client():
     )
 
 
-def _google_translate_text(text, target_language):
+def _google_translate_text(text, target_language, source_language=None):
     """Translate ``text`` into ``target_language`` using the Google Translate v2 API.
 
     ``target_language`` is a BCP-47 tag (e.g. ``en-US``); Translate v2 expects the
-    primary sub-tag (e.g. ``en``). Returns ``(translated_text, meta)``.
+    primary sub-tag (e.g. ``en``). When ``source_language`` is given (also a BCP-47
+    tag, e.g. the language Chirp detected for a segment) it is passed explicitly so
+    Translate does not have to guess. This matters for code-mixed transcripts:
+    auto-detection picks a single dominant language for the whole input and leaves
+    everything else untranslated, whereas an explicit per-segment source forces the
+    intended translation. Returns ``(translated_text, meta)``.
 
     Translate v2 is billed per character and returns no token usage, so ``meta``
-    reports ``characters`` (the billed unit), the detected source language and the
-    wall-clock ``time`` of the call.
+    reports ``characters`` (the billed unit), the source language (explicit or
+    detected) and the wall-clock ``time`` of the call.
     """
     from google.cloud import translate_v2 as translate
 
     target = target_language.split("-")[0]
+    source = source_language.split("-")[0] if source_language else None
     translate_start = perf_counter()
     client = translate.Client(credentials=_google_credentials())
-    result = client.translate(text, target_language=target, format_="text")
+    translate_kwargs = {"target_language": target, "format_": "text"}
+    if source:
+        translate_kwargs["source_language"] = source
+    result = client.translate(text, **translate_kwargs)
     meta = {
         "target_language": target,
+        "source_language": source,
         "detected_source_language": result.get("detectedSourceLanguage"),
         "characters": len(text),
         "time": perf_counter() - translate_start,
@@ -237,21 +261,93 @@ def _google_translate_text(text, target_language):
     return result["translatedText"], meta
 
 
+def _frame_pcm_bytes(frame):
+    """Return the exact little-endian s16 PCM bytes for a mono ``AudioFrame``.
+
+    FFmpeg may pad a decoded frame's plane buffer for alignment, so the buffer
+    is sliced to the precise ``samples * 2`` byte length (2 bytes per s16
+    sample, single channel).
+    """
+    return bytes(frame.planes[0])[: frame.samples * 2]
+
+
+def _iter_pcm_chunks(audio_data, chunk_seconds, sample_rate):
+    """Decode ``audio_data`` and yield mono PCM chunks of at most ``chunk_seconds``.
+
+    The audio (in any FFmpeg-decodable container/codec, e.g. webm/opus, mp4/aac,
+    mp3, ogg or wav) is decoded and resampled to ``sample_rate`` Hz mono signed
+    16-bit little-endian PCM, then split into contiguous chunks no longer than
+    ``chunk_seconds`` seconds. Each yielded value is raw PCM bytes suitable for a
+    Speech-to-Text v2 ``ExplicitDecodingConfig`` (LINEAR16) request, keeping every
+    request under the synchronous ``recognize`` audio-length limit.
+    """
+    try:
+        import av
+    except ModuleNotFoundError as e:  # pragma: no cover - dependency guard
+        raise Exception(
+            "Chirp long-audio transcription requires the 'av' (PyAV) package. "
+            "Install it with 'pip install av'."
+        ) from e
+
+    max_chunk_bytes = int(chunk_seconds * sample_rate * 2)
+    pending = bytearray()
+
+    def _emit_full():
+        while len(pending) >= max_chunk_bytes:
+            yield bytes(pending[:max_chunk_bytes])
+            del pending[:max_chunk_bytes]
+
+    try:
+        container = av.open(io.BytesIO(audio_data))
+    except Exception as e:
+        raise Exception(
+            f"Could not decode the audio file for transcription: {e}"
+        ) from e
+
+    with container:
+        audio_streams = container.streams.audio
+        if not audio_streams:
+            raise Exception("The uploaded audio file contains no audio stream.")
+        resampler = av.AudioResampler(
+            format="s16", layout="mono", rate=sample_rate
+        )
+        for frame in container.decode(audio_streams[0]):
+            for resampled_frame in resampler.resample(frame):
+                pending += _frame_pcm_bytes(resampled_frame)
+            yield from _emit_full()
+        # Flush any samples buffered inside the resampler.
+        for resampled_frame in resampler.resample(None):
+            pending += _frame_pcm_bytes(resampled_frame)
+        yield from _emit_full()
+
+    if pending:
+        yield bytes(pending)
+
+
 def _google_chirp_transcribe(audio_file_object, model_name, temperature=0):
     """Transcribe a single audio file using a Google Chirp model (STT v2).
 
+    The audio is decoded to 16 kHz mono PCM and split into chunks of at most
+    ``CHIRP_SYNC_CHUNK_SECONDS`` seconds so each stays under the synchronous
+    ``recognize`` audio-length limit; the per-chunk transcripts are stitched
+    back together in order.
+
     The source languages come from ``SCRIBE_TRANSCRIBE_FROM_LANGUAGES`` (at most
     two BCP-47 codes, or ``auto`` when unset). When ``SCRIBE_TRANSCRIBE_LANGUAGE``
-    is set, the transcript is translated into that language via the Google
-    Translate v2 API.
+    is set, each Chirp segment is translated into that language separately via the
+    Google Translate v2 API — passing Chirp's detected language as the source when
+    it differs from the target and auto-detecting otherwise — so code-mixed audio
+    is translated per segment instead of Translate guessing one dominant language
+    for the whole transcript.
 
     Returns the same dict shape as the other transcribers, plus independent
     metadata keys (no wrapper object). Speech-to-Text v2 (Chirp) is billed by
     audio duration and returns NO token usage, so the result carries
-    ``stt_billed_audio_seconds`` (the billed unit) and ``stt_time`` alongside the
-    source/detected languages, plus — when translation runs — the Translate v2
-    ``translation_*`` fields (target/detected-source language, characters, time).
-    ``temperature`` is accepted for a consistent signature but is unused by STT.
+    ``stt_billed_audio_seconds`` (the billed unit, summed over chunks) and
+    ``stt_time`` alongside the source/detected languages and ``stt_chunk_count``,
+    plus — when translation runs — the Translate v2 ``translation_*`` fields
+    (target/detected-source language, characters, time). ``temperature`` is
+    accepted for a consistent signature but is unused by STT.
     """
     from google.cloud.speech_v2.types import cloud_speech
 
@@ -264,57 +360,114 @@ def _google_chirp_transcribe(audio_file_object, model_name, temperature=0):
     location = (plugin_settings.SCRIBE_GOOGLE_LOCATION or "").strip() or "global"
     recognizer = f"projects/{project_id}/locations/{location}/recognizers/_"
 
+    # Long recordings exceed the synchronous ``recognize`` audio-length limit, so
+    # the audio is decoded once to 16 kHz mono PCM and transcribed in chunks. The
+    # explicit decoding config matches the PCM produced by ``_iter_pcm_chunks``.
     config = cloud_speech.RecognitionConfig(
-        auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),
+        explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
+            encoding=cloud_speech.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+            sample_rate_hertz=CHIRP_TARGET_SAMPLE_RATE,
+            audio_channel_count=1,
+        ),
         language_codes=language_codes,
         model=model_name,
     )
-    request = cloud_speech.RecognizeRequest(
-        recognizer=recognizer,
-        config=config,
-        content=audio_data,
-    )
-    stt_start = perf_counter()
-    client = google_speech_client()
-    response = client.recognize(request=request)
-    stt_time = perf_counter() - stt_start
 
-    transcript_parts = []
+    client = google_speech_client()
+
+    segments = []
     detected_languages = []
-    for result in response.results:
-        if result.alternatives:
-            transcript_parts.append(result.alternatives[0].transcript)
-        language_code = getattr(result, "language_code", "")
-        if language_code and language_code not in detected_languages:
-            detected_languages.append(language_code)
+    request_ids = []
+    billed_duration_total = 0.0
+    has_billed_duration = False
+    stt_time_total = 0.0
+    chunk_count = 0
+
+    for chunk in _iter_pcm_chunks(
+        audio_data, CHIRP_SYNC_CHUNK_SECONDS, CHIRP_TARGET_SAMPLE_RATE
+    ):
+        chunk_count += 1
+        request = cloud_speech.RecognizeRequest(
+            recognizer=recognizer,
+            config=config,
+            content=chunk,
+        )
+        stt_start = perf_counter()
+        response = client.recognize(request=request)
+        stt_time_total += perf_counter() - stt_start
+
+        for result in response.results:
+            language_code = getattr(result, "language_code", "") or ""
+            if result.alternatives:
+                text = result.alternatives[0].transcript
+                if text and text.strip():
+                    # Keep each segment paired with the language Chirp detected
+                    # for it so translation can be done per-language (below).
+                    segments.append((text, language_code))
+            if language_code and language_code not in detected_languages:
+                detected_languages.append(language_code)
+
+        metadata = getattr(response, "metadata", None)
+        if metadata is not None:
+            if metadata.total_billed_duration is not None:
+                billed_duration_total += metadata.total_billed_duration.total_seconds()
+                has_billed_duration = True
+            request_id = getattr(metadata, "request_id", None) or None
+            if request_id:
+                request_ids.append(request_id)
+
     transcript = " ".join(
-        part.strip() for part in transcript_parts if part and part.strip()
+        text.strip() for text, _ in segments if text and text.strip()
     ).strip()
 
-    billed_duration = None
-    request_id = None
-    metadata = getattr(response, "metadata", None)
-    if metadata is not None:
-        if metadata.total_billed_duration is not None:
-            billed_duration = metadata.total_billed_duration.total_seconds()
-        request_id = getattr(metadata, "request_id", None) or None
+    billed_duration = billed_duration_total if has_billed_duration else None
+    # STT v2 returns one request id per chunk; the first identifies the file.
+    request_id = request_ids[0] if request_ids else None
 
-    # Speech-to-Text v2 (Chirp) bills by audio duration and returns no token
-    # usage; ``stt_billed_audio_seconds`` is the usage metric Google reports.
+    # Chirp only transcribes, so any requested translation happens here via
+    # Translate v2, one Chirp segment at a time. Every segment is translated
+    # separately (never skipped): when Chirp reports a source language that
+    # differs from the target it is passed explicitly, otherwise Translate
+    # auto-detects. Translating per segment — and re-detecting when Chirp claims
+    # the target language — recovers segments Chirp mislabels (e.g. Hindi tagged
+    # ``en-IN``), which a single whole-transcript call would leave untranslated.
     translation_target = None
-    translation_source = None
-    translation_characters = None
-    translation_time = None
+    translation_sources = []
+    translation_characters = 0
+    translation_time = 0.0
 
     target_language = (plugin_settings.SCRIBE_TRANSCRIBE_LANGUAGE or "").strip()
-    if target_language and transcript:
-        transcript, translation_meta = _google_translate_text(
-            transcript, target_language
-        )
-        translation_target = translation_meta["target_language"]
-        translation_source = translation_meta["detected_source_language"]
-        translation_characters = translation_meta["characters"]
-        translation_time = translation_meta["time"]
+    if target_language and segments:
+        target_primary = target_language.split("-")[0]
+        translated_parts = []
+        for text, segment_language in segments:
+            segment_text = text.strip() if text else ""
+            if not segment_text:
+                continue
+            segment_primary = (segment_language or "").split("-")[0]
+            explicit_source = (
+                segment_language
+                if segment_primary and segment_primary != target_primary
+                else None
+            )
+            translated_text, translation_meta = _google_translate_text(
+                segment_text,
+                target_language,
+                source_language=explicit_source,
+            )
+            translated_parts.append(translated_text)
+            translation_target = translation_meta["target_language"]
+            translation_characters += translation_meta["characters"]
+            translation_time += translation_meta["time"]
+            source = (
+                translation_meta["source_language"]
+                or translation_meta["detected_source_language"]
+            )
+            if source and source not in translation_sources:
+                translation_sources.append(source)
+        transcript = " ".join(
+            part.strip() for part in translated_parts if part and part.strip()
+        ).strip()
 
     return {
         "text": transcript,
@@ -325,11 +478,12 @@ def _google_chirp_transcribe(audio_file_object, model_name, temperature=0):
         "stt_from_languages": language_codes,
         "stt_detected_languages": detected_languages,
         "stt_billed_audio_seconds": billed_duration,
-        "stt_time": stt_time,
+        "stt_time": stt_time_total,
+        "stt_chunk_count": chunk_count,
         "translation_target_language": translation_target,
-        "translation_detected_source_language": translation_source,
-        "translation_characters": translation_characters,
-        "translation_time": translation_time,
+        "translation_detected_source_language": translation_sources or None,
+        "translation_characters": translation_characters or None,
+        "translation_time": translation_time or None,
     }
 
 
@@ -359,6 +513,7 @@ def _merge_transcription_metadata(processing, result):
     _collect("transcription_detected_languages", result.get("stt_detected_languages"))
     _add("transcription_billed_audio_seconds", result.get("stt_billed_audio_seconds"))
     _add("transcription_stt_time", result.get("stt_time"))
+    _add("transcription_chunk_count", result.get("stt_chunk_count"))
     if result.get("translation_target_language"):
         processing["translation_target_language"] = result["translation_target_language"]
     _collect(
@@ -367,6 +522,25 @@ def _merge_transcription_metadata(processing, result):
     )
     _add("translation_characters", result.get("translation_characters"))
     _add("translation_time", result.get("translation_time"))
+
+
+def _chirp_quota_tokens(processing):
+    """Return quota-equivalent tokens for Chirp STT + Translate v2 usage.
+
+    Chirp (Speech-to-Text v2) is billed by audio seconds and Translate v2 by
+    translated characters; neither returns token usage, but scribe quota is
+    tracked in tokens. ``_merge_transcription_metadata`` has already summed the
+    billed audio seconds and translated characters across audio files onto
+    ``processing``, so they are converted here with fixed per-unit rates. Runs
+    that used no Chirp/Translate (OpenAI/Gemini) record neither metric and
+    yield 0.
+    """
+    seconds = processing.get("transcription_billed_audio_seconds") or 0
+    characters = processing.get("translation_characters") or 0
+    return round(
+        (seconds * CHIRP_TOKENS_PER_AUDIO_SECOND)
+        + (characters * TRANSLATE_TOKENS_PER_CHARACTER)
+    )
 
 
 def transcribe_audio_file(audio_file_object, provider, audio_model, temperature=0):
@@ -690,6 +864,13 @@ def process_ai_form_fill(external_id):
                     )
                     form.chat_input_tokens = input_tokens_total
                     form.chat_output_tokens = output_tokens_total
+
+                chirp_tokens = _chirp_quota_tokens(processing)
+                if chirp_tokens:
+                    processing["transcription_quota_tokens"] = chirp_tokens
+                    form.chat_input_tokens = (
+                        form.chat_input_tokens or 0
+                    ) + chirp_tokens
             form.transcript = transcript
             processing["ai_response"] = transcript
             form.meta["processings"] = [
@@ -1047,6 +1228,11 @@ def process_ai_form_fill(external_id):
         return
 
     processing["completion_time"] = perf_counter() - completion_start_time
+
+    chirp_tokens = _chirp_quota_tokens(processing)
+    if chirp_tokens:
+        processing["transcription_quota_tokens"] = chirp_tokens
+        form.chat_input_tokens = (form.chat_input_tokens or 0) + chirp_tokens
 
     # convert the keys back to the original field IDs
     converted_response = {k: ai_response_json.get(f"q{i}") for i,(k, v) in enumerate(processed_fields.items()) if ai_response_json.get(f"q{i}") is not None}

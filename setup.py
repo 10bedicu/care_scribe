@@ -22,6 +22,7 @@ requirements = [
     "google-genai==1.41.0",
     "google-cloud-speech==2.40.0",
     "google-cloud-translate==3.27.0",
+    "av==18.0.0",
 ]
 
 test_requirements = []
