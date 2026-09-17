@@ -39,7 +39,6 @@ class PluginSettings:  # pragma: no cover
         self.import_strings = import_strings or set()
         self.required_settings = required_settings or set()
         self._cached_attrs = set()
-        self.validate()
 
     def __getattr__(self, attr) -> Any:
         if attr not in self.defaults:
@@ -74,10 +73,11 @@ class PluginSettings:  # pragma: no cover
 
     def validate(self) -> None:
         """
-        This method handles the validation of the plugin settings.
-        It could be overridden to provide custom validation logic.
+        Validate that all required settings are configured.
 
-        the base implementation checks if all the required settings are truthy.
+        Call this at runtime (not import time) so plugin functionality that
+        needs these settings fails loudly, while asset builds that only import
+        the module keep working without them.
         """
         for setting in self.required_settings:
             if not getattr(self, setting):
