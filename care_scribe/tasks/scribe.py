@@ -386,18 +386,12 @@ def process_ai_form_fill(external_id):
             form.save()
             return
 
-    chat_provider, chat_model = (None, None)
-    if plugin_settings.SCRIBE_CHAT_MODEL_NAME:
-        chat_provider, chat_model = _parse_provider_model(
-            plugin_settings.SCRIBE_CHAT_MODEL_NAME
-        )
-
-    transcribe_provider, transcribe_model = (None, None)
-    if plugin_settings.SCRIBE_TRANSCRIBE_MODEL_NAME:
-        transcribe_provider, transcribe_model = _parse_provider_model(
-            plugin_settings.SCRIBE_TRANSCRIBE_MODEL_NAME
-        )
-
+    chat_provider, chat_model = _parse_provider_model(
+        plugin_settings.SCRIBE_CHAT_MODEL_NAME
+    )
+    transcribe_provider, transcribe_model = _parse_provider_model(
+        plugin_settings.SCRIBE_TRANSCRIBE_MODEL_NAME
+    )
     temperature = 0
 
     if form.chat_model:
@@ -414,26 +408,6 @@ def process_ai_form_fill(external_id):
 
     if form.chat_model_temperature is not None:
         temperature = form.chat_model_temperature
-
-    model_error = None
-    if form.transcript_only:
-        if not transcribe_model:
-            model_error = "No transcription model is configured. Please set SCRIBE_TRANSCRIBE_MODEL_NAME."
-    else:
-        if not chat_model:
-            model_error = "No chat model is configured. Please set SCRIBE_CHAT_MODEL_NAME."
-        elif chat_provider != "google" and not transcribe_model:
-            model_error = "No transcription model is configured. Please set SCRIBE_TRANSCRIBE_MODEL_NAME."
-
-    if model_error:
-        processing["error"] = model_error
-        form.meta["processings"] = [
-            *form.meta.get("processings", []),
-            processing
-        ]
-        form.status = Scribe.Status.FAILED
-        form.save()
-        return
 
     processing["transcribe_provider"] = transcribe_provider
     processing["transcribe_model"] = (
