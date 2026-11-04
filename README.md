@@ -53,6 +53,18 @@ plugs = [scribe_plug]
 
 The plugin will try to find the API key from the config first and then from the environment variable.
 
+## Bulk facility quotas
+
+The quota `bulk/` endpoint supports POST, PATCH, and DELETE for up to 500 IDs per
+request. POST takes `facility_external_ids`; PATCH and DELETE take quota
+`external_ids`. Bulk token values follow the model's integer limits (currently
+2,147,483,647 maximum), with a minimum of 1 for `tokens` and 0 for
+`tokens_per_user`. Invalid values return field validation errors before writing.
+
+Single and bulk creation lock the same facility rows while checking for existing
+active facility quotas and inserting. Bulk PATCH loads the facility and creator
+relations together for its response, avoiding per-quota relation queries.
+
 ## License
 
 This project is licensed under the terms of the [MIT license](LICENSE).

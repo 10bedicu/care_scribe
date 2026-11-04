@@ -3,9 +3,10 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from care.facility.models.facility import Facility
-from care_scribe.serializers.base import FacilitySerializer
 from care_scribe.models.scribe_quota import ScribeQuota
+from care_scribe.serializers.base import FacilitySerializer
 from care_scribe.serializers.scribe import ScribeUserSerializer
+
 
 class ScribeQuotaSerializer(serializers.ModelSerializer):
     facility = FacilitySerializer(read_only=True)
@@ -33,33 +34,61 @@ class ScribeQuotaSerializer(serializers.ModelSerializer):
             "tnc_accepted_date",
         )
 
-        read_only_fields = ("external_id", "used", "created_by", "created_date", "modified_date", "tnc_hash", "tnc_accepted_date")
+        read_only_fields = (
+            "external_id",
+            "used",
+            "created_by",
+            "created_date",
+            "modified_date",
+            "tnc_hash",
+            "tnc_accepted_date",
+        )
 
     def validate(self, attrs):
         facility_external_id = attrs.pop("facility_external_id", None)
 
         if not self.instance:
             if not facility_external_id:
-                raise serializers.ValidationError("The 'facility_external_id' must be provided.")
+                raise serializers.ValidationError(
+                    "The 'facility_external_id' must be provided."
+                )
 
             facility = Facility.objects.filter(external_id=facility_external_id).first()
             if not facility:
-                raise serializers.ValidationError(f"Facility does not exist.")
-
-            if ScribeQuota.objects.filter(facility__external_id=facility_external_id, user=None).exists():
-                raise serializers.ValidationError(f"A Scribe Quota already exists for this facility.")
+                raise serializers.ValidationError("Facility does not exist.")
 
             attrs["facility"] = facility
 
         return super().validate(attrs)
+
+    def create(self, validated_data):
+        with transaction.atomic():
+            facility = Facility.objects.select_for_update(of=("self",)).get(
+                pk=validated_data["facility"].pk
+            )
+            if ScribeQuota.objects.filter(facility=facility, user=None).exists():
+                raise serializers.ValidationError(
+                    {
+                        "non_field_errors": [
+                            "A Scribe Quota already exists for this facility."
+                        ]
+                    }
+                )
+            return super().create(validated_data)
 
 
 class ScribeQuotaBulkCreateSerializer(serializers.Serializer):
     facility_external_ids = serializers.ListField(
         child=serializers.UUIDField(), allow_empty=False, max_length=500
     )
-    tokens = serializers.IntegerField(min_value=1)
-    tokens_per_user = serializers.IntegerField(min_value=0)
+    tokens = serializers.IntegerField(
+        min_value=1,
+        validators=ScribeQuota._meta.get_field("tokens").validators,  # noqa: SLF001
+    )
+    tokens_per_user = serializers.IntegerField(
+        min_value=0,
+        validators=ScribeQuota._meta.get_field("tokens_per_user").validators,  # noqa: SLF001
+    )
     allow_ocr = serializers.BooleanField(default=False)
     allow_scribe = serializers.BooleanField(default=True)
     allow_notes_scribe = serializers.BooleanField(default=False)
@@ -86,12 +115,16 @@ class ScribeQuotaBulkCreateSerializer(serializers.Serializer):
                 if facility_id not in facilities:
                     errors[str(facility_id)] = "Facility does not exist."
                 elif facility_id in existing:
-                    errors[str(facility_id)] = "A Scribe Quota already exists for this facility."
+                    errors[str(facility_id)] = (
+                        "A Scribe Quota already exists for this facility."
+                    )
             if errors:
                 raise serializers.ValidationError({"facility_errors": errors})
 
             return [
-                ScribeQuota.objects.create(facility=facilities[facility_id], **validated_data)
+                ScribeQuota.objects.create(
+                    facility=facilities[facility_id], **validated_data
+                )
                 for facility_id in facility_ids
             ]
 
@@ -100,15 +133,25 @@ class ScribeQuotaBulkUpdateSerializer(serializers.Serializer):
     external_ids = serializers.ListField(
         child=serializers.UUIDField(), allow_empty=False, max_length=500
     )
-    tokens = serializers.IntegerField(min_value=1, required=False)
-    tokens_per_user = serializers.IntegerField(min_value=0, required=False)
+    tokens = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        validators=ScribeQuota._meta.get_field("tokens").validators,  # noqa: SLF001
+    )
+    tokens_per_user = serializers.IntegerField(
+        min_value=0,
+        required=False,
+        validators=ScribeQuota._meta.get_field("tokens_per_user").validators,  # noqa: SLF001
+    )
     allow_ocr = serializers.BooleanField(required=False)
     allow_scribe = serializers.BooleanField(required=False)
     allow_notes_scribe = serializers.BooleanField(required=False)
 
     def validate(self, attrs):
         if len(attrs) == 1:
-            raise serializers.ValidationError("At least one field to update must be provided.")
+            raise serializers.ValidationError(
+                "At least one field to update must be provided."
+            )
         return attrs
 
     def update_quotas(self):
@@ -129,7 +172,7 @@ class ScribeQuotaBulkUpdateSerializer(serializers.Serializer):
 
             queryset.update(**changes, modified_date=timezone.now())
 
-        return list(queryset)
+        return list(queryset.select_related("facility", "created_by"))
 
 
 class ScribeQuotaBulkDeleteSerializer(serializers.Serializer):
