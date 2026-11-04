@@ -1,3 +1,5 @@
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from care.facility.models.facility import Facility
@@ -50,3 +52,111 @@ class ScribeQuotaSerializer(serializers.ModelSerializer):
             attrs["facility"] = facility
 
         return super().validate(attrs)
+
+
+class ScribeQuotaBulkCreateSerializer(serializers.Serializer):
+    facility_external_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False, max_length=500
+    )
+    tokens = serializers.IntegerField(min_value=1)
+    tokens_per_user = serializers.IntegerField(min_value=0)
+    allow_ocr = serializers.BooleanField(default=False)
+    allow_scribe = serializers.BooleanField(default=True)
+    allow_notes_scribe = serializers.BooleanField(default=False)
+
+    def create(self, validated_data):
+        facility_ids = list(dict.fromkeys(validated_data.pop("facility_external_ids")))
+
+        with transaction.atomic():
+            # Row locks prevent concurrent requests from creating duplicate facility quotas.
+            facilities = {
+                facility.external_id: facility
+                for facility in Facility.objects.select_for_update(of=("self",)).filter(
+                    external_id__in=facility_ids
+                )
+            }
+            existing = set(
+                ScribeQuota.objects.filter(
+                    facility__in=facilities.values(), user=None
+                ).values_list("facility__external_id", flat=True)
+            )
+
+            errors = {}
+            for facility_id in facility_ids:
+                if facility_id not in facilities:
+                    errors[str(facility_id)] = "Facility does not exist."
+                elif facility_id in existing:
+                    errors[str(facility_id)] = "A Scribe Quota already exists for this facility."
+            if errors:
+                raise serializers.ValidationError({"facility_errors": errors})
+
+            return [
+                ScribeQuota.objects.create(facility=facilities[facility_id], **validated_data)
+                for facility_id in facility_ids
+            ]
+
+
+class ScribeQuotaBulkUpdateSerializer(serializers.Serializer):
+    external_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False, max_length=500
+    )
+    tokens = serializers.IntegerField(min_value=1, required=False)
+    tokens_per_user = serializers.IntegerField(min_value=0, required=False)
+    allow_ocr = serializers.BooleanField(required=False)
+    allow_scribe = serializers.BooleanField(required=False)
+    allow_notes_scribe = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        if len(attrs) == 1:
+            raise serializers.ValidationError("At least one field to update must be provided.")
+        return attrs
+
+    def update_quotas(self):
+        changes = dict(self.validated_data)
+        quota_ids = list(dict.fromkeys(changes.pop("external_ids")))
+        # Bulk edit only applies to facility-level quotas, matching the quota list.
+        queryset = ScribeQuota.objects.filter(user=None, external_id__in=quota_ids)
+
+        with transaction.atomic():
+            found = {quota.external_id for quota in queryset.select_for_update()}
+            errors = {
+                str(quota_id): "Quota does not exist."
+                for quota_id in quota_ids
+                if quota_id not in found
+            }
+            if errors:
+                raise serializers.ValidationError({"quota_errors": errors})
+
+            queryset.update(**changes, modified_date=timezone.now())
+
+        return list(queryset)
+
+
+class ScribeQuotaBulkDeleteSerializer(serializers.Serializer):
+    external_ids = serializers.ListField(
+        child=serializers.UUIDField(), allow_empty=False, max_length=500
+    )
+
+    def delete_quotas(self):
+        quota_ids = list(dict.fromkeys(self.validated_data["external_ids"]))
+
+        with transaction.atomic():
+            quotas = {
+                quota.external_id: quota
+                for quota in ScribeQuota.objects.select_for_update().filter(
+                    user=None, external_id__in=quota_ids
+                )
+            }
+            errors = {
+                str(quota_id): "Quota does not exist."
+                for quota_id in quota_ids
+                if quota_id not in quotas
+            }
+            if errors:
+                raise serializers.ValidationError({"quota_errors": errors})
+
+            # Per-instance delete so the model also removes the facility's user quotas.
+            for quota in quotas.values():
+                quota.delete()
+
+        return len(quotas)

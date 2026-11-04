@@ -9,7 +9,13 @@ from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
 
 from care_scribe.models.scribe_quota import ScribeQuota
-from care_scribe.serializers.scribe_quota import ScribeQuotaSerializer
+from care_scribe.serializers.base import FacilitySerializer
+from care_scribe.serializers.scribe_quota import (
+    ScribeQuotaBulkCreateSerializer,
+    ScribeQuotaBulkDeleteSerializer,
+    ScribeQuotaBulkUpdateSerializer,
+    ScribeQuotaSerializer,
+)
 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as rest_framework_filters
@@ -73,6 +79,39 @@ class ScribeQuotaViewSet(
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+
+    @action(detail=False, methods=["post"], url_path="bulk")
+    def bulk(self, request):
+        serializer = ScribeQuotaBulkCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        quotas = serializer.save(created_by=request.user)
+        return Response(self.get_serializer(quotas, many=True).data, status=201)
+
+    @bulk.mapping.patch
+    def bulk_update(self, request):
+        serializer = ScribeQuotaBulkUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        quotas = serializer.update_quotas()
+        return Response(self.get_serializer(quotas, many=True).data)
+
+    @bulk.mapping.delete
+    def bulk_delete(self, request):
+        serializer = ScribeQuotaBulkDeleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        deleted = serializer.delete_quotas()
+        return Response({"deleted": deleted})
+
+    @action(detail=False, methods=["get"], url_path="unassigned-facilities")
+    def unassigned_facilities(self, request):
+        assigned = ScribeQuota.objects.filter(user=None, facility__isnull=False).values("facility_id")
+        queryset = Facility.objects.exclude(id__in=assigned).order_by("name")
+
+        search = request.query_params.get("search")
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+
+        page = self.paginate_queryset(queryset)
+        return self.get_paginated_response(FacilitySerializer(page, many=True).data)
 
     @action(detail=False, methods=["get"], url_path="my-quota", permission_classes=[IsAuthenticated])
     def my_quota(self, request):
