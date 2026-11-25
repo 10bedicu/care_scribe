@@ -6,10 +6,15 @@ from django.db import models
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.db.models import Sum, F, ExpressionWrapper, IntegerField
+
 User = get_user_model()
 
-start_of_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-end_of_month = (start_of_month + timezone.timedelta(days=31)).replace(day=1) - timezone.timedelta(seconds=1)
+
+def current_month_range():
+    start_of_month = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end_of_month = (start_of_month + timezone.timedelta(days=31)).replace(day=1) - timezone.timedelta(seconds=1)
+    return start_of_month, end_of_month
+
 
 class ScribeQuota(BaseModel):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name="created_scribe_quota", null=True, blank=True)
@@ -21,7 +26,6 @@ class ScribeQuota(BaseModel):
     allow_ocr = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use OCR features")
     allow_scribe = models.BooleanField(default=True, help_text="Whether the user/facility is allowed to use normal (form-fill) scribes")
     allow_notes_scribe = models.BooleanField(default=False, help_text="Whether the user/facility is allowed to use transcript-only scribes")
-
 
     tnc_hash = models.CharField(max_length=255, null=True, blank=True, help_text="Hash of the terms and conditions accepted by the user")
     tnc_accepted_date = models.DateTimeField(null=True, blank=True, help_text="Date when the terms and conditions were accepted by the user")
@@ -42,16 +46,19 @@ class ScribeQuota(BaseModel):
         if self.user and not self.facility and ScribeQuota.objects.filter(user=self.user, facility=None).exclude(pk=self.pk).exists():
             raise ValidationError("The user already has an independent quota")
 
+    def calculate_used(self, from_date=None, to_date=None):
 
-    def calculate_used(self, from_date=start_of_month, to_date=end_of_month):
+        month_start, month_end = current_month_range()
+        if from_date is None:
+            from_date = month_start
+        if to_date is None:
+            to_date = month_end
+
         qs = self.facility.scribe_set.filter(created_date__range=(from_date, to_date))
         if self.user:
             qs = qs.filter(requested_by=self.user)
-        sum_expr = ExpressionWrapper(
-            F('chat_input_tokens') + F('chat_output_tokens'),
-            output_field=IntegerField()
-        )
-        total_tokens = qs.aggregate(total_tokens=Sum(sum_expr))['total_tokens'] or 0
+        sum_expr = ExpressionWrapper(F("chat_input_tokens") + F("chat_output_tokens"), output_field=IntegerField())
+        total_tokens = qs.aggregate(total_tokens=Sum(sum_expr))["total_tokens"] or 0
 
         self.used = total_tokens
         self.save(update_fields=["used"])

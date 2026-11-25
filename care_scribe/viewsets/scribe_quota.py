@@ -1,10 +1,4 @@
-from rest_framework.mixins import (
-    CreateModelMixin,
-    ListModelMixin,
-    RetrieveModelMixin,
-    UpdateModelMixin,
-    DestroyModelMixin
-)
+from rest_framework.mixins import CreateModelMixin, ListModelMixin, RetrieveModelMixin, UpdateModelMixin, DestroyModelMixin
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.viewsets import GenericViewSet
 
@@ -23,6 +17,7 @@ from care.facility.models.facility import Facility
 from care.emr.models.organization import FacilityOrganizationUser
 from django.utils import timezone
 
+
 class ScribeQuotaFilter(filters.FilterSet):
 
     facility = filters.CharFilter(
@@ -38,14 +33,7 @@ class ScribeQuotaFilter(filters.FilterSet):
     )
 
 
-class ScribeQuotaViewSet(
-    ListModelMixin,
-    RetrieveModelMixin,
-    CreateModelMixin,
-    UpdateModelMixin,
-    GenericViewSet,
-    DestroyModelMixin
-):
+class ScribeQuotaViewSet(ListModelMixin, RetrieveModelMixin, CreateModelMixin, UpdateModelMixin, GenericViewSet, DestroyModelMixin):
     queryset = ScribeQuota.objects.all()
     serializer_class = ScribeQuotaSerializer
     lookup_field = "external_id"
@@ -89,6 +77,11 @@ class ScribeQuotaViewSet(
         facility_quota = ScribeQuota.objects.filter(facility__external_id=facility_id, user=None).first()
         accepted_tnc = user_quota.tnc_hash == tnc_hash if user_quota else False
 
+        if facility_quota:
+            facility_quota.calculate_used()
+        if user_quota:
+            user_quota.calculate_used()
+
         to_show = []
         if facility_quota:
             to_show.append(facility_quota)
@@ -98,10 +91,11 @@ class ScribeQuotaViewSet(
         serializer = self.get_serializer(to_show, many=True)
         return Response(
             {
-                "quotas" : serializer.data,
+                "quotas": serializer.data,
                 "tnc_accepted": accepted_tnc,
-                "tnc" : tnc,
-            })
+                "tnc": tnc,
+            }
+        )
 
     @action(detail=False, methods=["post"], url_path="accept-tnc", permission_classes=[IsAuthenticated])
     def accept_tnc(self, request):
