@@ -47,8 +47,13 @@ class ScribeQuota(BaseModel):
             raise ValidationError("The user already has an independent quota")
 
     def calculate_used(self, from_date=None, to_date=None):
-        if from_date is None or to_date is None:
-            from_date, to_date = current_month_range()
+
+        month_start, month_end = current_month_range()
+        if from_date is None:
+            from_date = month_start
+        if to_date is None:
+            to_date = month_end
+
         qs = self.facility.scribe_set.filter(created_date__range=(from_date, to_date))
         if self.user:
             qs = qs.filter(requested_by=self.user)
